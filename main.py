@@ -1,7 +1,8 @@
 import os
 import asyncio
+from aiohttp import web
 
-# يجب تعيين حلقة الأحداث قبل استدعاء Pyrogram لتوافق بايثون 3.14
+# تهيئة حلقة الأحداث لبايثون الحديث
 try:
     asyncio.get_event_loop()
 except RuntimeError:
@@ -31,6 +32,21 @@ async def play_audio(client, message):
     else:
         await message.reply_text("الرجاء الرد على ملف صوتي أو تسجيل بالأمر `/play`")
 
+# خادم ويب وهمي لإبقاء الخدمة مفعلة على Render بدون أخطاء
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def web_server():
+    server = web.Application()
+    server.add_routes([web.get("/", handle)])
+    runner = web.AppRunner(server)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
 if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.create_task(web_server())
     print("البوت يعمل الآن...")
     app.run()
