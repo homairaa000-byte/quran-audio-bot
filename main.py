@@ -1,12 +1,13 @@
 import os
 import asyncio
-from pyrogram import Client, filters
 
-# تهيئة حلقة الأحداث لبايثون الحديث
+# يجب تعيين حلقة الأحداث قبل استدعاء Pyrogram لتوافق بايثون 3.14
 try:
     asyncio.get_event_loop()
 except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
+
+from pyrogram import Client, filters
 
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
@@ -18,7 +19,7 @@ app = Client("quran_audio_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_
 async def start_cmd(client, message):
     await message.reply_text(
         "أهلاً بك في بوت بث صوتيات المقرأة 🎙\n\n"
-        "أرسل أو رد على أي ملف صوتي بـ `/play` ونشره في الدردشة."
+        "أرسل أو رد على أي ملف صوتي بـ `/play` لنشره في الدردشة."
     )
 
 @app.on_message(filters.command("play") & (filters.group | filters.channel))
