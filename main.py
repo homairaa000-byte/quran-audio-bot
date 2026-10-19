@@ -2,8 +2,7 @@ import os
 import asyncio
 from aiohttp import web
 from pyrogram import Client, filters
-from pytgcalls import PyTgCalls
-from pytgcalls.types import AudioPiped
+from pytgcalls import GroupCallFactory
 
 # تهيئة حلقة الأحداث
 try:
@@ -16,7 +15,7 @@ API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
 app = Client("quran_audio_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-call_py = PyTgCalls(app)
+group_call_factory = GroupCallFactory(app)
 
 @app.on_message(filters.command("start"))
 async def start_cmd(client, message):
@@ -29,16 +28,13 @@ async def start_cmd(client, message):
 async def play_audio(client, message):
     if message.reply_to_message and (message.reply_to_message.audio or message.reply_to_message.voice):
         msg = await message.reply_text("🔄 جاري تحميل الملف والدخول للمكالمة الصوتية...")
-
+        
         # تحميل الملف الصوتي
         file_path = await message.reply_to_message.download()
-
+        
         try:
-            # انضمام البوت للمكالمة الصوتية وبث الصوت
-            await call_py.join_group_call(
-                message.chat.id,
-                AudioPiped(file_path)
-            )
+            group_call = group_call_factory.get_file_group_call(file_path)
+            await group_call.start(message.chat.id)
             await msg.edit_text("▶️ جاري بث الدرس الآن داخل المكالمة الصوتية...")
         except Exception as e:
             await msg.edit_text(f"❌ حدث خطأ أثناء الانضمام للمكالمة: {e}")
@@ -48,7 +44,9 @@ async def play_audio(client, message):
 @app.on_message(filters.command("stop") & (filters.group | filters.channel))
 async def stop_audio(client, message):
     try:
-        await call_py.leave_group_call(message.chat.id)
+        group_call = group_call_factory.get_group_call()
+        if group_call:
+            await group_call.stop()
         await message.reply_text("⏹ تم إيقاف البث ومغادرة المكالمة الصوتية.")
     except Exception as e:
         await message.reply_text(f"❌ خطأ: {e}")
@@ -69,5 +67,5 @@ async def web_server():
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.create_task(web_server())
-    loop.run_until_complete(call_py.start())
+    print("البوت يعمل الآن...")
     app.run()
