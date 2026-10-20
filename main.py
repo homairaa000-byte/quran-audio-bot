@@ -56,7 +56,7 @@ group_call_factory = GroupCallFactory(app)
 call_py = group_call_factory.get_group_call()
 
 # -------------------------
-# Handlers (الأوامر والتحكم ببث الدروس)
+# Handlers (الأوامر والتحكم ببث الدروس مع حماية تامة للأخطاء)
 # -------------------------
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
@@ -106,14 +106,26 @@ async def heartbeat():
         await asyncio.sleep(60)
 
 # -------------------------
-# Main
+# Main with Peer Error Suppression
 # -------------------------
 
 async def main():
     try:
         await app.start()
+
+        # تجاوز أي خطأ متعلق بمعرفات الـ Peer المفقودة بصمت تام لمنع ظهور السجلات المزعجة
+        original_handler = app.handle_updates
         
-        # إزالة استدعاء call_py.start() الخاطئة، حيث يتم الاتصال مباشرة عند استخدام join_group_call
+        async def safe_handle_updates(update):
+            try:
+                await original_handler(update)
+            except Exception as err:
+                if "Peer id invalid" in str(err) or "ID not found" in str(err):
+                    pass
+                else:
+                    raise err
+
+        app.handle_updates = safe_handle_updates
 
         me = await app.get_me()
         logger.info("CONNECTED | id=%s | username=%s", me.id, me.username)
