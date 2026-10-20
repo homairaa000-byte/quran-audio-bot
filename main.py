@@ -60,12 +60,11 @@ app = Client(
 )
 
 # -------------------------
-# Listen to ALL updates (Chats + Channels)
+# Debug & Commands Handler
 # -------------------------
 
-@app.on_message()
-@app.on_channel_post()
-async def handle_all_updates(client, message):
+@app.on_message(filters.all)
+async def handle_all_messages(client, message):
     try:
         text = message.text or message.caption or ""
         chat_id = message.chat.id if message.chat else None
@@ -76,8 +75,8 @@ async def handle_all_updates(client, message):
             text
         )
 
-        # استجابة لأمر /ping
-        if text.strip().startswith("/ping"):
+        # الرد التلقائي عند إرسال /ping للتأكد من الاستجابة
+        if text.strip().lower().startswith("/ping"):
             logger.info("PING_COMMAND_TRIGGERED")
             await message.reply_text("pong 🟢 - البوت متصل ويستجيب بنجاح!")
 
