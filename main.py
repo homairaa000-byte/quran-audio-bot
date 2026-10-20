@@ -9,7 +9,6 @@ from werkzeug.serving import make_server
 from pyrogram import Client, filters
 from pyrogram import utils as pyrogram_utils
 from pytgcalls import GroupCallFactory
-from pytgcalls.types.input_stream import AudioPiped
 
 
 # =========================================================
@@ -206,9 +205,8 @@ async def play_handler(client, message):
             audio_source,
         )
 
-        # الانضمام للمكالمة وتشغيل البث بالطريقة الصحيحة المتوافقة مع الإصدار
         await group_call.join(chat_id)
-        await group_call.play(AudioPiped(audio_source))
+        group_call.input_filename = audio_source
 
         await message.reply_text(
             "🎙️ **تم بدء بث المحاضرة في المكالمة المباشرة بنجاح!**"
@@ -231,7 +229,7 @@ async def stop_handler(client, message):
             chat_id,
         )
 
-        await group_call.leave()
+        await group_call.leave_current_group_call()
 
         await message.reply_text(
             "⏹️ **تم إيقاف البث والخروج من المكالمة المباشرة.**"
@@ -243,7 +241,7 @@ async def stop_handler(client, message):
 
 
 # =========================================================
-# 6. التشغيل الآمن وغير المتزامن
+# 6. التشغيل الآمن
 # =========================================================
 
 if __name__ == "__main__":
