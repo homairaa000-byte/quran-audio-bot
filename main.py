@@ -24,15 +24,57 @@ logger = logging.getLogger("quran_lectures_bot")
 
 
 # =========================================================
-# 2. إعداد حدود معرّفات القنوات
+# 2. إيصال إصلاح معالجة معرّفات القنوات والمجموعات في Pyrogram
 # =========================================================
 
+_original_get_peer_type = pyrogram_utils.get_peer_type
+
+
+def fixed_get_peer_type(peer_id):
+    """
+    معالجة معرّفات القنوات التي تتجاوز الحدود
+    القديمة في Pyrogram 2.0.106.
+    """
+    if (
+        isinstance(peer_id, int)
+        and peer_id < pyrogram_utils.MAX_CHANNEL_ID
+        and peer_id >= -1007852516352
+    ):
+        return "channel"
+
+    return _original_get_peer_type(peer_id)
+
+
 pyrogram_utils.MIN_CHANNEL_ID = -1007852516352
+pyrogram_utils.MIN_CHAT_ID = -999999999999
+pyrogram_utils.get_peer_type = fixed_get_peer_type
+
 
 logger.info(
-    "PYROGRAM_CHANNEL_ID_LIMIT_UPDATED | MIN_CHANNEL_ID=%s",
+    "PYROGRAM_ID_FIX_APPLIED | "
+    "MIN_CHANNEL_ID=%s | "
+    "MIN_CHAT_ID=%s | "
+    "MAX_CHANNEL_ID=%s",
     pyrogram_utils.MIN_CHANNEL_ID,
+    pyrogram_utils.MIN_CHAT_ID,
+    pyrogram_utils.MAX_CHANNEL_ID,
 )
+
+
+# اختبار التعديل قبل تشغيل البوت
+try:
+    test_peer_id = -1003717140618
+    test_peer_type = pyrogram_utils.get_peer_type(test_peer_id)
+
+    logger.info(
+        "PEER_ID_TEST_PASSED | id=%s | type=%s",
+        test_peer_id,
+        test_peer_type,
+    )
+
+except Exception:
+    logger.exception("PEER_ID_TEST_FAILED")
+    raise
 
 
 # =========================================================
@@ -187,4 +229,69 @@ async def status_handler(client, message):
         logger.exception("STATUS_ERROR")
 
         await message.reply_text(
-            "❌ تعذر ف
+            "❌ تعذر فحص الحالة بسبب خطأ داخلي."
+        )
+
+
+# =========================================================
+# 10. أوامر التشغيل والإيقاف (Play / Stop)
+# =========================================================
+
+@app.on_message(
+    filters.command("play") & filters.me
+)
+async def play_handler(client, message):
+    try:
+        chat_id = message.chat.id
+        args = message.text.split(maxsplit=1)
+        audio_source = args[1] if len(args) > 1 else DEFAULT_AUDIO
+
+        logger.info(
+            "PLAY_RECEIVED | chat_id=%s | source=%s",
+            chat_id,
+            audio_source,
+        )
+
+        await group_call.join_group_call(
+            chat_id,
+            audio_source,
+        )
+
+        await message.reply_text(
+            "🎙️ **تم بدء بث المحاضرة في المكالمة المباشرة بنجاح!**"
+        )
+
+    except Exception as exc:
+        logger.exception("PLAY_ERROR")
+        await message.reply_text(f"❌ تعذر بدء البث: {exc}")
+
+
+@app.on_message(
+    filters.command("stop") & filters.me
+)
+async def stop_handler(client, message):
+    try:
+        chat_id = message.chat.id
+
+        logger.info(
+            "STOP_RECEIVED | chat_id=%s",
+            chat_id,
+        )
+
+        await group_call.leave_group_call(chat_id)
+
+        await message.reply_text(
+            "⏹️ **تم إيقاف البث والخروج من المكالمة المباشرة.**"
+        )
+
+    except Exception as exc:
+        logger.exception("STOP_ERROR")
+        await message.reply_text(f"❌ تعذر إيقاف البث: {exc}")
+
+
+# =========================================================
+# 11. تشغيل التطبيق
+# =========================================================
+
+if __name__ == "__main__":
+    app.run()
