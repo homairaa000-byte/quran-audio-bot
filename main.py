@@ -3,7 +3,7 @@ import os
 from threading import Thread
 from flask import Flask
 from pyrogram import Client, filters
-from pytgcalls import PyTgCalls
+from pytgcalls import GroupCallFactory
 from pytgcalls.types import AudioPiped, HighQualityAudio
 from pytgcalls.types.stream import StreamAudioEnded
 
@@ -21,7 +21,7 @@ def run_web():
 Thread(target=run_web, daemon=True).start()
 # ---------------------------------------------
 
-# قراءة المتغيرات
+# قراءة المتغيرات من إعدادات Render
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
@@ -35,8 +35,8 @@ app = Client(
     session_string=SESSION_STRING
 )
 
-# التهيئة الصحيحة المتوافقة مع الإصدار الثالث
-call_py = PyTgCalls(app)
+# التهيئة بالطريقة الصحيحة المتوافقة مع الإصدار المثبت
+call_py = GroupCallFactory(app).get_group_call()
 
 @call_py.on_stream_end()
 async def stream_end_handler(client, update):
@@ -54,13 +54,7 @@ async def stream_end_handler(client, update):
 async def start_stream(client, message):
     chat_id = message.chat.id
     try:
-        await call_py.play(
-            chat_id,
-            AudioPiped(
-                STREAM_URL,
-                audio_parameters=HighQualityAudio()
-            )
-        )
+        await call_py.join_group_call(chat_id, AudioPiped(STREAM_URL, audio_parameters=HighQualityAudio()))
         await message.edit_text("🔊 **تم بدء بث القرآن الكريم بنقاء وجودة عالية!**")
     except Exception as e:
         await message.edit_text(f"❌ حدث خطأ أثناء التشغيل: `{e}`")
@@ -69,7 +63,7 @@ async def start_stream(client, message):
 async def stop_stream(client, message):
     chat_id = message.chat.id
     try:
-        await call_py.leave_call(chat_id)
+        await call_py.leave_group_call(chat_id)
         await message.edit_text("⏹ **تم إيقاف البث والخروج من المكالمة.**")
     except Exception as e:
         await message.edit_text(f"❌ حدث خطأ: `{e}`")
