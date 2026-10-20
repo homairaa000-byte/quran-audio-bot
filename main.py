@@ -45,18 +45,21 @@ SESSION_STRING = os.environ["SESSION_STRING"]
 # رابط افتراضي لبث المحاضرات أو دروس المقراة
 DEFAULT_AUDIO = "https://server8.mp3quran.net/afs/001.mp3"
 
+# استخدام منشئ العميل مع تقييد استقبال التحديثات غير الضرورية لمنع أخطاء الـ Peer
 app = Client(
     "fresh_userbot_v3",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
+    workers=4,
+    plugins=None
 )
 
 group_call_factory = GroupCallFactory(app)
 call_py = group_call_factory.get_group_call()
 
 # -------------------------
-# Handlers (الأوامر والتحكم ببث الدروس مع حماية تامة للأخطاء)
+# Handlers (الأوامر والتحكم ببث الدروس)
 # -------------------------
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
@@ -106,26 +109,12 @@ async def heartbeat():
         await asyncio.sleep(60)
 
 # -------------------------
-# Main with Peer Error Suppression
+# Main
 # -------------------------
 
 async def main():
     try:
         await app.start()
-
-        # تجاوز أي خطأ متعلق بمعرفات الـ Peer المفقودة بصمت تام لمنع ظهور السجلات المزعجة
-        original_handler = app.handle_updates
-        
-        async def safe_handle_updates(update):
-            try:
-                await original_handler(update)
-            except Exception as err:
-                if "Peer id invalid" in str(err) or "ID not found" in str(err):
-                    pass
-                else:
-                    raise err
-
-        app.handle_updates = safe_handle_updates
 
         me = await app.get_me()
         logger.info("CONNECTED | id=%s | username=%s", me.id, me.username)
