@@ -1,19 +1,34 @@
 import asyncio
 import os
+from threading import Thread
+from flask import Flask
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import AudioPiped, HighQualityAudio
 from pytgcalls.types.stream import StreamAudioEnded
 
-# قراءة المتغيرات من إعدادات Render
+# --- خدعة سيرفر الويب لضمان بقاء البوت مجاناً على Render ---
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "البوت يعمل بنجاح 24/7!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host="0.0.0.0", port=port)
+
+# تشغيل سيرفر الويب في مسار منفصل (Thread)
+Thread(target=run_web, daemon=True).start()
+# ----------------------------------------------------
+
+# قراءة البيانات من متغيرات البيئة
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
-# رابط بث القرآن الكريم (صوت نقاح وعالي الجودة)
 STREAM_URL = "http://stream.radiojar.com/8s44324461uvv"
 
-# إعداد عميل تيليجرام (Userbot)
 app = Client(
     "quran_userbot",
     api_id=API_ID,
@@ -21,12 +36,10 @@ app = Client(
     session_string=SESSION_STRING
 )
 
-# تشغيل مكالمات تيليجرام
 call_py = PyTgCalls(app)
 
 @call_py.on_stream_end()
 async def stream_end_handler(client, update):
-    # إعادة تشغيل البث تلقائياً عند انتهائه ليعمل بشكل دائم
     if isinstance(update, StreamAudioEnded):
         chat_id = update.chat_id
         await call_py.play(
@@ -64,7 +77,7 @@ async def stop_stream(client, message):
 async def main():
     await app.start()
     await call_py.start()
-    print("✅ البوت يعمل بنجاح وجاهز لبث الصوت!")
+    print("✅ البوت وسيرفر الويب يعملان بنجاح!")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
