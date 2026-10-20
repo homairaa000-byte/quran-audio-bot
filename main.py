@@ -58,7 +58,7 @@ logger.info(
 
 
 # =========================================================
-# 3. خادم الويب الخاص بـ Render (يعمل في الخلفية بشكل مستقل تماماً)
+# 3. خادم الويب الخاص بـ Render (يعمل في خيط مستقل)
 # =========================================================
 
 web_app = Flask(__name__)
@@ -85,7 +85,7 @@ def run_web():
             "0.0.0.0",
             port,
             web_app,
-            threaded=True
+            threaded=True,
         )
 
         logger.info(
@@ -241,8 +241,20 @@ async def stop_handler(client, message):
 
 
 # =========================================================
-# 6. التشغيل الآمن للعميل
+# 6. التشغيل الآمن وغير المتزامن (منع الإيقاف المفاجئ)
 # =========================================================
 
+async def main():
+    await app.start()
+    me = await app.get_me()
+    logger.info("BOT_STARTED_SUCCESSFULLY | username=%s", me.username)
+    
+    # إبقاء التشغيل نشطاً وعدم السماح للخيط بالانغلاق
+    await asyncio.Event().wait()
+
+
 if __name__ == "__main__":
-    app.run()
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("BOT_STOPPED_GRACEFULLY")
