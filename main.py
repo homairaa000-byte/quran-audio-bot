@@ -9,6 +9,7 @@ from werkzeug.serving import make_server
 from pyrogram import Client, filters
 from pyrogram import utils as pyrogram_utils
 from pytgcalls import GroupCallFactory
+from pytgcalls.types.input_stream import AudioPiped
 
 
 # =========================================================
@@ -58,7 +59,7 @@ logger.info(
 
 
 # =========================================================
-# 3. خادم الويب الخاص بـ Render (يعمل في خيط مستقل)
+# 3. خادم الويب الخاص بـ Render
 # =========================================================
 
 web_app = Flask(__name__)
@@ -205,8 +206,9 @@ async def play_handler(client, message):
             audio_source,
         )
 
+        # الانضمام للمكالمة وتشغيل البث بالطريقة الصحيحة المتوافقة مع الإصدار
         await group_call.join(chat_id)
-        group_call.input_filename = audio_source
+        await group_call.play(AudioPiped(audio_source))
 
         await message.reply_text(
             "🎙️ **تم بدء بث المحاضرة في المكالمة المباشرة بنجاح!**"
@@ -229,7 +231,7 @@ async def stop_handler(client, message):
             chat_id,
         )
 
-        await group_call.leave_current_group_call()
+        await group_call.leave()
 
         await message.reply_text(
             "⏹️ **تم إيقاف البث والخروج من المكالمة المباشرة.**"
@@ -241,20 +243,8 @@ async def stop_handler(client, message):
 
 
 # =========================================================
-# 6. التشغيل الآمن وغير المتزامن (منع الإيقاف المفاجئ)
+# 6. التشغيل الآمن وغير المتزامن
 # =========================================================
 
-async def main():
-    await app.start()
-    me = await app.get_me()
-    logger.info("BOT_STARTED_SUCCESSFULLY | username=%s", me.username)
-    
-    # إبقاء التشغيل نشطاً وعدم السماح للخيط بالانغلاق
-    await asyncio.Event().wait()
-
-
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("BOT_STOPPED_GRACEFULLY")
+    app.run()
