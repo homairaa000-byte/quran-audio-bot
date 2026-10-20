@@ -2,3 +2,4 @@ pyrogram==2.0.106
 pytgcalls==3.0.0.dev24
 tgcrypto==1.2.5
 av==18.1.0
+flask==3.0.0
