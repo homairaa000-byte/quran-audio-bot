@@ -7,22 +7,20 @@ from flask import Flask
 from pyrogram import Client, filters
 from pytgcalls import GroupCallFactory
 
-
-# ==========================================
-# 1. إعداد السجلات
-# ==========================================
+# ==============================
+# إعداد السجلات
+# ==============================
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
+    format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
 logger = logging.getLogger("quran_audio_bot")
 
-
-# ==========================================
-# 2. خادم الويب المجاني على Render
-# ==========================================
+# ==============================
+# خادم الويب المطلوب في Render
+# ==============================
 
 web_app = Flask(__name__)
 
@@ -39,25 +37,18 @@ def health():
 
 def run_web():
     port = int(os.environ.get("PORT", "10000"))
-
     web_app.run(
         host="0.0.0.0",
         port=port,
-        use_reloader=False,
+        use_reloader=False
     )
 
 
-web_thread = Thread(
-    target=run_web,
-    daemon=True,
-)
+Thread(target=run_web, daemon=True).start()
 
-web_thread.start()
-
-
-# ==========================================
-# 3. إعداد حساب تيليجرام
-# ==========================================
+# ==============================
+# إعدادات تيليجرام
+# ==============================
 
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
@@ -65,62 +56,58 @@ SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
 STREAM_URL = "http://stream.radiojar.com/8s44324461uvv"
 
-
 if not API_ID or not API_HASH or not SESSION_STRING:
     raise RuntimeError(
-        "خطأ: تأكدي من ضبط API_ID وAPI_HASH وSESSION_STRING في Render."
+        "تأكدي من ضبط API_ID وAPI_HASH وSESSION_STRING في Render."
     )
-
 
 app = Client(
     "quran_userbot",
     api_id=API_ID,
     api_hash=API_HASH,
-    session_string=SESSION_STRING,
+    session_string=SESSION_STRING
 )
-
-
-# ==========================================
-# 4. إعداد المكالمة الصوتية
-# ==========================================
 
 call_py = GroupCallFactory(app).get_group_call()
 
+# ==============================
+# تسجيل جميع الرسائل للتشخيص
+# ==============================
 
-# ==========================================
-# 5. تسجيل الرسائل الواردة للتشخيص
-# ==========================================
-
-@app.on_message(
-    filters.incoming,
-    group=10,
-)
+@app.on_message(filters.all, group=99)
 async def debug_messages(client, message):
+    try:
+        chat_id = message.chat.id if message.chat else None
+        chat_type = message.chat.type if message.chat else None
 
-    chat_id = message.chat.id if message.chat else None
+        text = message.text or message.caption or ""
 
-    logger.info(
-        "وصلت رسالة | chat_id=%s | type=%s",
-        chat_id,
-        message.chat.type if message.chat else None,
-    )
+        logger.info(
+            "تم رصد رسالة | chat_id=%s | type=%s | outgoing=%s | text=%s",
+            chat_id,
+            chat_type,
+            message.outgoing,
+            text[:150]
+        )
 
+    except Exception:
+        logger.exception("خطأ أثناء تسجيل رسالة للتشخيص")
 
-# ==========================================
-# 6. أمر تشغيل بث القرآن الكريم
-# ==========================================
+# ==============================
+# أمر تشغيل بث القرآن
+# ==============================
 
 @app.on_message(
     filters.command("play", prefixes="/"),
-    group=0,
+    group=0
 )
 async def start_stream(client, message):
-
     chat_id = message.chat.id
 
     logger.info(
-        "استلام أمر /play في المحادثة %s",
+        "تم استلام أمر /play | chat_id=%s | outgoing=%s",
         chat_id,
+        message.outgoing
     )
 
     status_message = None
@@ -130,30 +117,21 @@ async def start_stream(client, message):
             "⏳ جارٍ محاولة تشغيل بث القرآن الكريم..."
         )
 
-        await call_py.join_group_call(
-            chat_id,
-            STREAM_URL,
-        )
+        await call_py.join_group_call(chat_id, STREAM_URL)
 
         await status_message.edit_text(
             "🔊 تم إرسال طلب تشغيل بث القرآن الكريم."
         )
 
-        logger.info(
-            "اكتمل طلب الانضمام إلى المكالمة في المحادثة %s",
-            chat_id,
-        )
+        logger.info("تم تنفيذ طلب /play بنجاح")
 
     except Exception as e:
-
-        logger.exception(
-            "حدث خطأ أثناء تنفيذ أمر /play"
-        )
+        logger.exception("فشل تنفيذ أمر /play")
 
         error_text = (
-            "❌ تعذّر تشغيل البث.\n"
+            f"❌ تعذّر تشغيل البث.\n"
             f"نوع الخطأ: {type(e).__name__}\n"
-            f"التفاصيل: {str(e)[:500]}"
+            f"التفاصيل: {str(e)[:300]}"
         )
 
         try:
@@ -161,28 +139,24 @@ async def start_stream(client, message):
                 await status_message.edit_text(error_text)
             else:
                 await message.reply_text(error_text)
-
         except Exception:
-            logger.exception(
-                "تعذّر إرسال رسالة الخطأ إلى تيليجرام"
-            )
+            logger.exception("تعذّر إرسال رسالة الخطأ")
 
-
-# ==========================================
-# 7. أمر إيقاف بث القرآن الكريم
-# ==========================================
+# ==============================
+# أمر إيقاف البث
+# ==============================
 
 @app.on_message(
     filters.command("stop", prefixes="/"),
-    group=0,
+    group=0
 )
 async def stop_stream(client, message):
-
     chat_id = message.chat.id
 
     logger.info(
-        "استلام أمر /stop في المحادثة %s",
+        "تم استلام أمر /stop | chat_id=%s | outgoing=%s",
         chat_id,
+        message.outgoing
     )
 
     try:
@@ -192,39 +166,26 @@ async def stop_stream(client, message):
             "⏹ تم إرسال طلب إيقاف البث."
         )
 
-        logger.info(
-            "اكتمل طلب إيقاف البث في المحادثة %s",
-            chat_id,
-        )
+        logger.info("تم تنفيذ طلب /stop بنجاح")
 
     except Exception as e:
-
-        logger.exception(
-            "حدث خطأ أثناء تنفيذ أمر /stop"
-        )
+        logger.exception("فشل تنفيذ أمر /stop")
 
         try:
             await message.reply_text(
-                "❌ تعذّر إيقاف البث.\n"
+                f"❌ تعذّر إيقاف البث.\n"
                 f"نوع الخطأ: {type(e).__name__}\n"
-                f"التفاصيل: {str(e)[:500]}"
+                f"التفاصيل: {str(e)[:300]}"
             )
-
         except Exception:
-            logger.exception(
-                "تعذّر إرسال رسالة الخطأ إلى تيليجرام"
-            )
+            logger.exception("تعذّر إرسال رسالة الخطأ")
 
-
-# ==========================================
-# 8. تشغيل حساب تيليجرام
-# ==========================================
+# ==============================
+# تشغيل الحساب
+# ==============================
 
 async def main():
-
-    logger.info(
-        "بدء تشغيل حساب تيليجرام..."
-    )
+    logger.info("بدء تشغيل حساب تيليجرام...")
 
     try:
         await app.start()
@@ -234,46 +195,28 @@ async def main():
         logger.info(
             "تم الاتصال بنجاح | user_id=%s | username=%s",
             me.id,
-            me.username,
+            me.username
         )
 
-        logger.info(
-            "البوت جاهز لاختبار استقبال الرسائل."
-        )
+        logger.info("البوت جاهز لاختبار استقبال الرسائل.")
 
         await asyncio.Event().wait()
 
     except Exception:
-        logger.exception(
-            "حدث خطأ أثناء تشغيل حساب تيليجرام."
-        )
+        logger.exception("حدث خطأ أثناء تشغيل الحساب")
         raise
 
     finally:
         if app.is_connected:
             await app.stop()
+            logger.info("تم إيقاف اتصال تيليجرام")
 
-            logger.info(
-                "تم إيقاف اتصال تيليجرام."
-            )
-
-
-# ==========================================
-# 9. نقطة بدء البرنامج
-# ==========================================
 
 if __name__ == "__main__":
-
     try:
         asyncio.run(main())
-
     except KeyboardInterrupt:
-        logger.info(
-            "تم إيقاف البرنامج يدويًا."
-        )
-
+        logger.info("تم إيقاف البرنامج يدويًا")
     except Exception:
-        logger.exception(
-            "توقف البرنامج بسبب خطأ."
-        )
+        logger.exception("توقف البرنامج بسبب خطأ")
         raise
