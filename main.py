@@ -34,7 +34,7 @@ app = Client(
     session_string=SESSION_STRING
 )
 
-# تفعيل مشغل المكالمات بالطريقة المدعومة في الإصدار المثبت
+# تهيئة مشغل المكالمات
 call_py = GroupCallFactory(app).get_group_call()
 
 @app.on_message(filters.command("play", prefixes="/") & filters.me)
@@ -57,7 +57,7 @@ async def stop_stream(client, message):
 
 async def main():
     await app.start()
-    await call_py.start()
+    # تم إزالة call_py.start() لأن الاتصال يبدأ تلقائياً عند انضمام البوت للمكالمة
     print("✅ البوت وسيرفر الويب يعملان بنجاح وبدون توقف!")
     await asyncio.Event().wait()
 
