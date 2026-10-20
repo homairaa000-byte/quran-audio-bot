@@ -45,14 +45,13 @@ SESSION_STRING = os.environ["SESSION_STRING"]
 # رابط افتراضي لبث المحاضرات أو دروس المقراة
 DEFAULT_AUDIO = "https://server8.mp3quran.net/afs/001.mp3"
 
-# استخدام منشئ العميل مع تقييد استقبال التحديثات غير الضرورية لمنع أخطاء الـ Peer
+# تعطيل التحديثات المتقدمة ومنع الاستماع للقنوات الميتة
 app = Client(
     "fresh_userbot_v3",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
-    workers=4,
-    plugins=None
+    in_memory=True
 )
 
 group_call_factory = GroupCallFactory(app)
