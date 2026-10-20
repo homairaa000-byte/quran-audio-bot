@@ -7,20 +7,19 @@ from pytgcalls import PyTgCalls
 from pytgcalls.types import AudioPiped, HighQualityAudio
 from pytgcalls.types.stream import StreamAudioEnded
 
-# --- سيرفر الويب لضمان بقاء الخدمة مجانية على Render ---
+# --- سيرفر الويب المجاني لإرضاء منصة Render ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Bot is active 24/7!"
+    return "Quran Audio Bot is Running 24/7!"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
     web_app.run(host="0.0.0.0", port=port)
 
-# تشغيل سيرفر الويب في الخلفية
 Thread(target=run_web, daemon=True).start()
-# --------------------------------------------------
+# ---------------------------------------------
 
 # قراءة المتغيرات
 API_ID = int(os.environ.get("API_ID", 0))
@@ -36,6 +35,7 @@ app = Client(
     session_string=SESSION_STRING
 )
 
+# التهيئة الصحيحة المتوافقة مع الإصدار الثالث
 call_py = PyTgCalls(app)
 
 @call_py.on_stream_end()
