@@ -5,8 +5,8 @@ import threading
 
 from flask import Flask
 from pyrogram import Client, filters
-from pytgcalls import PyTgCalls
-from pytgcalls.types import AudioPiped
+from pytgcalls import GroupCallFactory
+from pytgcalls.types.input_stream import AudioPiped
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,7 +51,8 @@ app = Client(
     session_string=SESSION_STRING,
 )
 
-call_py = PyTgCalls(app)
+group_call_factory = GroupCallFactory(app)
+call_py = group_call_factory.get_group_call()
 
 # -------------------------
 # Handlers (Incoming & Outgoing)
@@ -67,7 +68,7 @@ async def play_handler(client, message):
     chat_id = message.chat.id
     logger.info("PLAY_COMMAND_DETECTED | chat=%s", chat_id)
     try:
-        await call_py.play(chat_id, AudioPiped(STREAM_URL))
+        await call_py.join_group_call(chat_id, AudioPiped(STREAM_URL))
         await message.reply_text("🔊 تم بدء بث إذاعة القرآن الكريم بنجاح!")
     except Exception as e:
         logger.exception("PLAY_ERROR")
@@ -77,7 +78,7 @@ async def play_handler(client, message):
 async def stop_handler(client, message):
     chat_id = message.chat.id
     try:
-        await call_py.leave_call(chat_id)
+        await call_py.leave_group_call(chat_id)
         await message.reply_text("⏹ تم إيقاف البث والخروج من المكالمة.")
     except Exception as e:
         await message.reply_text(f"❌ خطأ: {e}")
