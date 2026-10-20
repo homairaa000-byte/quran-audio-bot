@@ -5,7 +5,7 @@ import threading
 
 from flask import Flask
 from pyrogram import Client, filters
-from pytgcalls import PyTgCalls
+from pytgcalls import GroupCallFactory
 from pytgcalls.types.input_stream import AudioPiped
 
 logging.basicConfig(
@@ -53,7 +53,8 @@ app = Client(
     session_string=SESSION_STRING,
 )
 
-call_py = PyTgCalls(app)
+group_call_factory = GroupCallFactory(app)
+call_py = group_call_factory.get_group_call()
 
 # -------------------------
 # Handlers
@@ -114,21 +115,24 @@ async def heartbeat():
 
 async def main():
     try:
-        # تسخين التخزين المؤقت وحل مشكلة الـ Peer قبل بدء العميل
-        async with app:
-            try:
-                async for dialog in app.get_dialogs():
+        await app.start()
+        await call_py.start()
+
+        me = await app.get_me()
+        logger.info("CONNECTED | id=%s | username=%s", me.id, me.username)
+
+        # حل نهائي لمشكلة Peer id المفقود بتسخين وإجبار جلب المحادثات
+        try:
+            async for dialog in app.get_dialogs():
+                try:
+                    await app.get_chat(dialog.chat.id)
+                except Exception:
                     pass
-            except Exception:
-                pass
+        except Exception:
+            pass
 
-            await call_py.start()
-
-            me = await app.get_me()
-            logger.info("CONNECTED | id=%s | username=%s", me.id, me.username)
-
-            asyncio.create_task(heartbeat())
-            await asyncio.Event().wait()
+        asyncio.create_task(heartbeat())
+        await asyncio.Event().wait()
 
     except Exception:
         logger.exception("FATAL_ERROR")
