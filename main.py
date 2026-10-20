@@ -19,12 +19,10 @@ def run_web():
 Thread(target=run_web, daemon=True).start()
 # ---------------------------------------------
 
-# قراءة المتغيرات من إعدادات Render
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
-# رابط بث القرآن الكريم
 STREAM_URL = "http://stream.radiojar.com/8s44324461uvv"
 
 app = Client(
@@ -34,30 +32,29 @@ app = Client(
     session_string=SESSION_STRING
 )
 
-# تهيئة مشغل المكالمات
 call_py = GroupCallFactory(app).get_group_call()
 
-@app.on_message(filters.command("play", prefixes="/") & filters.me)
+@app.on_message(filters.command("play", prefixes="/"))
 async def start_stream(client, message):
     chat_id = message.chat.id
     try:
+        await message.reply("⏳ جاري الانضمام إلى المكالمة الصوتية وبث القرآن الكريم...")
         await call_py.join_group_call(chat_id, STREAM_URL)
         await message.edit_text("🔊 **تم بدء بث القرآن الكريم بنقاء وجودة عالية!**")
     except Exception as e:
-        await message.edit_text(f"❌ حدث خطأ أثناء التشغيل: `{e}`")
+        await message.reply(f"❌ حدث خطأ أثناء التشغيل: `{e}`")
 
-@app.on_message(filters.command("stop", prefixes="/") & filters.me)
+@app.on_message(filters.command("stop", prefixes="/"))
 async def stop_stream(client, message):
     chat_id = message.chat.id
     try:
         await call_py.leave_group_call(chat_id)
-        await message.edit_text("⏹ **تم إيقاف البث والخروج من المكالمة.**")
+        await message.reply("⏹ **تم إيقاف البث والخروج من المكالمة.**")
     except Exception as e:
-        await message.edit_text(f"❌ حدث خطأ: `{e}`")
+        await message.reply(f"❌ حدث خطأ: `{e}`")
 
 async def main():
     await app.start()
-    # تم إزالة call_py.start() لأن الاتصال يبدأ تلقائياً عند انضمام البوت للمكالمة
     print("✅ البوت وسيرفر الويب يعملان بنجاح وبدون توقف!")
     await asyncio.Event().wait()
 
