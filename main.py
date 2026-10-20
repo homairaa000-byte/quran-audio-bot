@@ -52,7 +52,6 @@ app = Client(
     session_string=SESSION_STRING,
 )
 
-# تهيئة الاتصال الصوتي
 group_call_factory = GroupCallFactory(app)
 call_py = group_call_factory.get_group_call()
 
@@ -113,7 +112,8 @@ async def heartbeat():
 async def main():
     try:
         await app.start()
-        await call_py.start()
+        
+        # إزالة استدعاء call_py.start() الخاطئة، حيث يتم الاتصال مباشرة عند استخدام join_group_call
 
         me = await app.get_me()
         logger.info("CONNECTED | id=%s | username=%s", me.id, me.username)
