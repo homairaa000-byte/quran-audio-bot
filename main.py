@@ -1,78 +1,69 @@
-import os
 import asyncio
-from aiohttp import web
 from pyrogram import Client, filters
-from pytgcalls import GroupCallFactory
+from pytgcalls import PyTgCalls
+from pytgcalls.types import AudioPiped, HighQualityAudio
+from pytgcalls.types.stream import StreamAudioEnded
 
-# تهيئة حلقة الأحداث
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
-
+# قراءة البيانات من متغيرات البيئة (Environment Variables) في Render
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
-# استخدام SESSION_STRING بدلاً من BOT_TOKEN لتمكين البوت من دخول المكالمة الصوتية
+# رابط بث القرآن الكريم (صوت عالي النقاء)
+STREAM_URL = "http://stream.radiojar.com/8s44324461uvv"
+
+# إعداد العميل (Userbot)
 app = Client(
-    "quran_audio_bot",
+    "quran_userbot",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING
 )
 
-group_call_factory = GroupCallFactory(app)
+call_py = PyTgCalls(app)
 
-@app.on_message(filters.command("start"))
-async def start_cmd(client, message):
-    await message.reply_text(
-        "أهلاً بك في بوت بث صوتيات المقرأة 🎙\n\n"
-        "للدخول وبث الصوت في المكالمة الصوتية، قم بالرد على الملف الصوتي بـ `/play`."
-    )
+@call_py.on_stream_end()
+async def stream_end_handler(client, update):
+    # إعادت البث تلقائياً عند انتهائه لضمان عمله 24/7
+    if isinstance(update, StreamAudioEnded):
+        chat_id = update.chat_id
+        await call_py.play(
+            chat_id,
+            AudioPiped(
+                STREAM_URL,
+                audio_parameters=HighQualityAudio()
+            )
+        )
 
-@app.on_message(filters.command("play") & (filters.group | filters.channel))
-async def play_audio(client, message):
-    if message.reply_to_message and (message.reply_to_message.audio or message.reply_to_message.voice):
-        msg = await message.reply_text("🔄 جاري تحميل الملف والدخول للمكالمة الصوتية...")
-        
-        # تحميل الملف الصوتي
-        file_path = await message.reply_to_message.download()
-        
-        try:
-            group_call = group_call_factory.get_file_group_call(file_path)
-            await group_call.start(message.chat.id)
-            await msg.edit_text("▶️ جاري بث الدرس الآن داخل المكالمة الصوتية...")
-        except Exception as e:
-            await msg.edit_text(f"❌ حدث خطأ أثناء الانضمام للمكالمة: {e}")
-    else:
-        await message.reply_text("الرجاء الرد على ملف صوتي بالأمر `/play`")
-
-@app.on_message(filters.command("stop") & (filters.group | filters.channel))
-async def stop_audio(client, message):
+@app.on_message(filters.command("play", prefixes="/") & filters.me)
+async def start_stream(client, message):
+    chat_id = message.chat.id
     try:
-        group_call = group_call_factory.get_group_call()
-        if group_call:
-            await group_call.stop()
-        await message.reply_text("⏹ تم إيقاف البث ومغادرة المكالمة الصوتية.")
+        await call_py.play(
+            chat_id,
+            AudioPiped(
+                STREAM_URL,
+                audio_parameters=HighQualityAudio()
+            )
+        )
+        await message.edit_text("🔊 **تم بدء بث القرآن الكريم بنقاء وجودة عالية!**")
     except Exception as e:
-        await message.reply_text(f"❌ خطأ: {e}")
+        await message.edit_text(f"❌ حدث خطأ أثناء تشغيل البث: `{e}`")
 
-# خادم الويب للحفاظ على نشاط الخدمة على Render
-async def handle(request):
-    return web.Response(text="Bot is running!")
+@app.on_message(filters.command("stop", prefixes="/") & filters.me)
+async def stop_stream(client, message):
+    chat_id = message.chat.id
+    try:
+        await call_py.leave_call(chat_id)
+        await message.edit_text("⏹ **تم إيقاف البث والخروج من المكالمة.**")
+    except Exception as e:
+        await message.edit_text(f"❌ حدث خطأ: `{e}`")
 
-async def web_server():
-    server = web.Application()
-    server.add_routes([web.get("/", handle)])
-    runner = web.AppRunner(server)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
+async def main():
+    await app.start()
+    await call_py.start()
+    print("✅ البوت يعمل بنجاح وجاهز لبث الصوت!")
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(web_server())
-    print("البوت يعمل الآن...")
-    app.run()
+    asyncio.run(main())
