@@ -1,18 +1,19 @@
 import asyncio
+import os
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import AudioPiped, HighQualityAudio
 from pytgcalls.types.stream import StreamAudioEnded
 
-# قراءة البيانات من متغيرات البيئة (Environment Variables) في Render
+# قراءة المتغيرات من إعدادات Render
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
-# رابط بث القرآن الكريم (صوت عالي النقاء)
+# رابط بث القرآن الكريم (صوت نقاح وعالي الجودة)
 STREAM_URL = "http://stream.radiojar.com/8s44324461uvv"
 
-# إعداد العميل (Userbot)
+# إعداد عميل تيليجرام (Userbot)
 app = Client(
     "quran_userbot",
     api_id=API_ID,
@@ -20,11 +21,12 @@ app = Client(
     session_string=SESSION_STRING
 )
 
+# تشغيل مكالمات تيليجرام
 call_py = PyTgCalls(app)
 
 @call_py.on_stream_end()
 async def stream_end_handler(client, update):
-    # إعادت البث تلقائياً عند انتهائه لضمان عمله 24/7
+    # إعادة تشغيل البث تلقائياً عند انتهائه ليعمل بشكل دائم
     if isinstance(update, StreamAudioEnded):
         chat_id = update.chat_id
         await call_py.play(
@@ -48,7 +50,7 @@ async def start_stream(client, message):
         )
         await message.edit_text("🔊 **تم بدء بث القرآن الكريم بنقاء وجودة عالية!**")
     except Exception as e:
-        await message.edit_text(f"❌ حدث خطأ أثناء تشغيل البث: `{e}`")
+        await message.edit_text(f"❌ حدث خطأ أثناء التشغيل: `{e}`")
 
 @app.on_message(filters.command("stop", prefixes="/") & filters.me)
 async def stop_stream(client, message):
