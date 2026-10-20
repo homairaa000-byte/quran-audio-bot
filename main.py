@@ -5,8 +5,8 @@ import threading
 
 from flask import Flask
 from pyrogram import Client, filters
-from pytgcalls import GroupCallFactory
-from pytgcalls.types.input_stream import AudioPiped
+from pytgcalls import PyTgCalls
+from pytgcalls.types import AudioPiped
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,28 +51,36 @@ app = Client(
     session_string=SESSION_STRING,
 )
 
-group_call_factory = GroupCallFactory(app)
-call_py = group_call_factory.get_group_call()
+call_py = PyTgCalls(app)
 
 # -------------------------
-# Handlers (Incoming & Outgoing)
+# Handlers
 # -------------------------
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
 async def ping_handler(client, message):
     logger.info("PING_DETECTED")
-    await message.reply_text("pong 🟢 - البوت يعمل ويستجيب بنجاح!")
+    try:
+        await message.reply_text("pong 🟢 - البوت يعمل ويستجيب بنجاح!")
+    except Exception:
+        pass
 
 @app.on_message(filters.command("play") & (filters.me | filters.incoming))
 async def play_handler(client, message):
     chat_id = message.chat.id
     logger.info("PLAY_COMMAND_DETECTED | chat=%s", chat_id)
     try:
-        await call_py.join_group_call(chat_id, AudioPiped(STREAM_URL))
+        await call_py.join_group_call(
+            chat_id,
+            AudioPiped(STREAM_URL)
+        )
         await message.reply_text("🔊 تم بدء بث إذاعة القرآن الكريم بنجاح!")
     except Exception as e:
         logger.exception("PLAY_ERROR")
-        await message.reply_text(f"❌ حدث خطأ أثناء الانضمام: {e}")
+        try:
+            await message.reply_text(f"❌ حدث خطأ أثناء الانضمام: {e}")
+        except Exception:
+            pass
 
 @app.on_message(filters.command("stop") & (filters.me | filters.incoming))
 async def stop_handler(client, message):
@@ -81,7 +89,10 @@ async def stop_handler(client, message):
         await call_py.leave_group_call(chat_id)
         await message.reply_text("⏹ تم إيقاف البث والخروج من المكالمة.")
     except Exception as e:
-        await message.reply_text(f"❌ خطأ: {e}")
+        try:
+            await message.reply_text(f"❌ خطأ: {e}")
+        except Exception:
+            pass
 
 # -------------------------
 # Alive Loop
