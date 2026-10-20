@@ -23,9 +23,11 @@ web_app = Flask(__name__)
 def home():
     return "Userbot Running", 200
 
+
 @web_app.route("/health")
 def health():
     return {"status": "ok"}, 200
+
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -35,6 +37,7 @@ def run_web():
         port=port,
         use_reloader=False
     )
+
 
 threading.Thread(
     target=run_web,
@@ -50,29 +53,25 @@ API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
 
 app = Client(
-    "test_userbot_v2",
+    "fresh_userbot_v3",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
 )
 
 # -------------------------
-# Catch Everything
+# Debug Messages
 # -------------------------
 
 @app.on_message(filters.all)
 async def all_messages(client, message):
     try:
-        chat_id = message.chat.id if message.chat else None
-        from_id = message.from_user.id if message.from_user else None
-
         logger.info(
             "UPDATE_RECEIVED | chat=%s | from=%s | text=%s",
-            chat_id,
-            from_id,
+            message.chat.id if message.chat else None,
+            message.from_user.id if message.from_user else None,
             message.text or message.caption or "<media>"
         )
-
     except Exception:
         logger.exception("UPDATE_HANDLER_ERROR")
 
@@ -114,6 +113,22 @@ async def main():
             me.username
         )
 
+        logger.info("SYNCING_DIALOGS")
+
+        dialogs_count = 0
+
+        try:
+            async for dialog in app.get_dialogs():
+                dialogs_count += 1
+
+            logger.info(
+                "DIALOGS_SYNCED | count=%s",
+                dialogs_count
+            )
+
+        except Exception:
+            logger.exception("DIALOG_SYNC_FAILED")
+
         logger.info("READY")
 
         asyncio.create_task(heartbeat())
@@ -123,6 +138,7 @@ async def main():
     except Exception:
         logger.exception("FATAL_ERROR")
         raise
+
 
 if __name__ == "__main__":
     asyncio.run(main())
