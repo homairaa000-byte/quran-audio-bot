@@ -1,11 +1,10 @@
 import asyncio
-import os
 import logging
-from threading import Thread
+import os
+import threading
 
 from flask import Flask
 from pyrogram import Client, filters
-import pyrogram.utils
 from pytgcalls import GroupCallFactory
 
 
@@ -22,16 +21,7 @@ logger = logging.getLogger("quran_audio_bot")
 
 
 # ==================================================
-# معالجة معرّفات القنوات والمجموعات الحديثة
-# ==================================================
-# إصدار Pyrogram المستخدم قد يرفض بعض معرّفات القنوات الحديثة.
-# نوسّع الحد المقبول قبل بدء استقبال تحديثات تيليجرام.
-
-pyrogram.utils.MIN_CHANNEL_ID = -1007852516352
-
-
-# ==================================================
-# خادم الويب المطلوب في Render
+# خادم الويب الخاص بـ Render
 # ==================================================
 
 web_app = Flask(__name__)
@@ -57,7 +47,7 @@ def run_web():
     )
 
 
-Thread(
+threading.Thread(
     target=run_web,
     daemon=True
 ).start()
@@ -70,8 +60,6 @@ Thread(
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
-
-STREAM_URL = "http://stream.radiojar.com/8s44324461uvv"
 
 
 if not API_ID or not API_HASH or not SESSION_STRING:
@@ -94,41 +82,81 @@ app = Client(
 
 
 # ==================================================
-# إنشاء مشغل الصوت
+# إنشاء مشغل المحادثة الصوتية
 # ==================================================
 
 call_py = GroupCallFactory(app).get_group_call()
 
 
 # ==================================================
-# تسجيل الرسائل الواردة والصادرة للتشخيص
+# متغيرات التشغيل
+# ==================================================
+
+active_chat_id = None
+current_audio_path = None
+
+playback_lock = asyncio.Lock()
+
+
+# ==================================================
+# التحقق من أن الرسالة تحتوي على صوتية
+# ==================================================
+
+def get_audio_message(message):
+    """
+    يقبل الرسائل الصوتية وملفات الصوت،
+    سواء أكانت Voice أو Audio أو ملفًا صوتيًا.
+    """
+
+    if message is None:
+        return False
+
+    if message.voice:
+        return True
+
+    if message.audio:
+        return True
+
+    if message.document:
+        mime_type = message.document.mime_type or ""
+
+        if mime_type.startswith("audio/"):
+            return True
+
+    return False
+
+
+# ==================================================
+# تسجيل الرسائل الواردة للتشخيص
 # ==================================================
 
 @app.on_message(filters.all, group=99)
 async def debug_messages(client, message):
     try:
         chat_id = message.chat.id if message.chat else None
-        chat_type = message.chat.type if message.chat else None
 
-        message_text = message.text or message.caption or ""
+        message_text = (
+            message.text
+            or message.caption
+            or ""
+        )
 
         logger.info(
-            "تم رصد رسالة | chat_id=%s | type=%s | "
+            "رسالة مرصودة | chat_id=%s | "
             "outgoing=%s | text=%s",
             chat_id,
-            chat_type,
             message.outgoing,
-            message_text[:150]
+            message_text[:100]
         )
 
     except Exception:
         logger.exception(
-            "حدث خطأ أثناء تسجيل رسالة للتشخيص"
+            "حدث خطأ أثناء تسجيل الرسالة"
         )
 
 
 # ==================================================
-# أمر تشغيل بث القرآن الكريم
+# أمر تشغيل الصوتية
 # ==================================================
 
 @app.on_message(
@@ -137,62 +165,167 @@ async def debug_messages(client, message):
 )
 async def start_stream(client, message):
 
+    global active_chat_id
+    global current_audio_path
+
     chat_id = message.chat.id
 
     logger.info(
-        "تم استلام أمر /play | chat_id=%s | outgoing=%s",
-        chat_id,
-        message.outgoing
+        "استلام أمر /play | chat_id=%s",
+        chat_id
     )
 
-    status_message = None
+    # يجب أن يكون الأمر ردًا على رسالة صوتية.
+    audio_message = message.reply_to_message
 
-    try:
+    if not audio_message:
+        await message.reply_text(
+            "⚠️ لتشغيل الدرس:\n\n"
+            "1. اختاري رسالة الصوتية المطلوبة.\n"
+            "2. اضغطي «رد» على الرسالة.\n"
+            "3. أرسلي الأمر /play"
+        )
+        return
+
+    if not get_audio_message(audio_message):
+        await message.reply_text(
+            "❌ الرسالة التي رددتِ عليها ليست صوتية "
+            "معروفة لديّ.\n\n"
+            "ردّي على رسالة صوتية أو ملف صوتي "
+            "ثم أرسلي /play."
+        )
+        return
+
+    async with playback_lock:
+
         status_message = await message.reply_text(
-            "⏳ جارٍ محاولة تشغيل بث القرآن الكريم..."
+            "⏳ جارٍ تجهيز صوتية الدرس..."
         )
 
-        await call_py.join_group_call(
-            chat_id,
-            STREAM_URL
-        )
-
-        await status_message.edit_text(
-            "🔊 تم إرسال طلب تشغيل بث القرآن الكريم."
-        )
-
-        logger.info(
-            "تم تنفيذ طلب /play بنجاح | chat_id=%s",
-            chat_id
-        )
-
-    except Exception as e:
-
-        logger.exception(
-            "فشل تنفيذ أمر /play | chat_id=%s",
-            chat_id
-        )
-
-        error_text = (
-            "❌ تعذّر تشغيل البث.\n"
-            f"نوع الخطأ: {type(e).__name__}\n"
-            f"التفاصيل: {str(e)[:300]}"
-        )
+        downloaded_path = None
 
         try:
-            if status_message:
-                await status_message.edit_text(error_text)
-            else:
-                await message.reply_text(error_text)
-
-        except Exception:
-            logger.exception(
-                "تعذّر إرسال رسالة الخطأ الخاصة بأمر /play"
+            # تحميل الصوتية من رسالة تيليجرام.
+            downloaded_path = await client.download_media(
+                audio_message,
+                file_name="/tmp/"
             )
+
+            if not downloaded_path:
+                raise RuntimeError(
+                    "لم أتمكن من تحميل الصوتية من تيليجرام."
+                )
+
+            if not os.path.isfile(downloaded_path):
+                raise FileNotFoundError(
+                    "لم يُعثر على ملف الصوتية بعد تحميله."
+                )
+
+            if os.path.getsize(downloaded_path) == 0:
+                raise RuntimeError(
+                    "ملف الصوتية فارغ."
+                )
+
+            logger.info(
+                "تم تحميل الصوتية | path=%s | size=%s",
+                downloaded_path,
+                os.path.getsize(downloaded_path)
+            )
+
+            # يمنع محاولة تشغيل الصوتية في محادثة أخرى
+            # إذا كان المشغل متصلًا بمحادثة صوتية مختلفة.
+            if (
+                active_chat_id is not None
+                and active_chat_id != chat_id
+            ):
+                raise RuntimeError(
+                    "المشغل متصل بمحادثة أخرى. "
+                    "أوقفي التشغيل الحالي أولًا."
+                )
+
+            # الانضمام إلى المحادثة الصوتية عند الحاجة.
+            if active_chat_id is None:
+                await call_py.join(chat_id)
+                active_chat_id = chat_id
+
+                logger.info(
+                    "تم الانضمام إلى المحادثة الصوتية | chat_id=%s",
+                    chat_id
+                )
+
+            # إيقاف الصوتية السابقة إن وجدت.
+            if current_audio_path is not None:
+                try:
+                    await call_py.stop_audio()
+                except Exception:
+                    logger.info(
+                        "لا توجد صوتية سابقة قيد التشغيل."
+                    )
+
+                try:
+                    if os.path.isfile(current_audio_path):
+                        os.remove(current_audio_path)
+                except OSError:
+                    logger.warning(
+                        "تعذر حذف ملف الصوتية السابقة."
+                    )
+
+                current_audio_path = None
+
+            # بث الصوتية المختارة.
+            await call_py.start_audio(downloaded_path)
+
+            current_audio_path = downloaded_path
+
+            await status_message.edit_text(
+                "🔊 بدأ تشغيل صوتية الدرس داخل المحادثة الصوتية."
+            )
+
+            logger.info(
+                "بدأ تشغيل الصوتية بنجاح | chat_id=%s | file=%s",
+                chat_id,
+                downloaded_path
+            )
+
+        except Exception as error:
+
+            logger.exception(
+                "فشل تشغيل الصوتية | chat_id=%s",
+                chat_id
+            )
+
+            error_text = (
+                "❌ تعذّر تشغيل الصوتية.\n\n"
+                f"نوع الخطأ: {type(error).__name__}\n"
+                f"التفاصيل: {str(error)[:500]}\n\n"
+                "تأكدي من أن المحادثة الصوتية مفتوحة "
+                "وأن الحساب يستطيع الانضمام إليها."
+            )
+
+            try:
+                await status_message.edit_text(error_text)
+            except Exception:
+                logger.exception(
+                    "تعذر إرسال تفاصيل خطأ التشغيل."
+                )
+
+            # إذا فشل بدء التشغيل، نحذف الملف الذي حملناه
+            # ما لم يكن هو الملف الجاري استخدامه.
+            try:
+                if (
+                    downloaded_path
+                    and downloaded_path != current_audio_path
+                    and os.path.isfile(downloaded_path)
+                ):
+                    os.remove(downloaded_path)
+            except OSError:
+                logger.warning(
+                    "تعذر حذف الملف المؤقت بعد فشل التشغيل."
+                )
 
 
 # ==================================================
-# أمر إيقاف بث القرآن الكريم
+# أمر إيقاف الصوتية
 # ==================================================
 
 @app.on_message(
@@ -201,43 +334,58 @@ async def start_stream(client, message):
 )
 async def stop_stream(client, message):
 
+    global current_audio_path
+
     chat_id = message.chat.id
 
     logger.info(
-        "تم استلام أمر /stop | chat_id=%s | outgoing=%s",
-        chat_id,
-        message.outgoing
+        "استلام أمر /stop | chat_id=%s",
+        chat_id
     )
 
-    try:
-        await call_py.leave_group_call(chat_id)
-
-        await message.reply_text(
-            "⏹ تم إرسال طلب إيقاف البث."
-        )
-
-        logger.info(
-            "تم تنفيذ طلب /stop بنجاح | chat_id=%s",
-            chat_id
-        )
-
-    except Exception as e:
-
-        logger.exception(
-            "فشل تنفيذ أمر /stop | chat_id=%s",
-            chat_id
-        )
+    async with playback_lock:
 
         try:
-            await message.reply_text(
-                "❌ تعذّر إيقاف البث.\n"
-                f"نوع الخطأ: {type(e).__name__}\n"
-                f"التفاصيل: {str(e)[:300]}"
+            if active_chat_id != chat_id:
+                await message.reply_text(
+                    "⚠️ لا يوجد تشغيل مسجل لهذه المجموعة."
+                )
+                return
+
+            await call_py.stop_audio()
+
+            logger.info(
+                "تم إيقاف الصوتية | chat_id=%s",
+                chat_id
             )
 
-        except Exception:
+            await message.reply_text(
+                "⏹ تم إيقاف صوتية الدرس."
+            )
+
+            # حذف الملف بعد طلب إيقاف التشغيل.
+            if current_audio_path:
+                try:
+                    if os.path.isfile(current_audio_path):
+                        os.remove(current_audio_path)
+                except OSError:
+                    logger.warning(
+                        "تعذر حذف ملف الصوتية بعد إيقافها."
+                    )
+
+                current_audio_path = None
+
+        except Exception as error:
+
             logger.exception(
-                "تعذّر إرسال رسالة الخطأ الخاصة بأمر /stop"
+                "فشل إيقاف الصوتية | chat_id=%s",
+                chat_id
+            )
+
+            await message.reply_text(
+                "❌ تعذّر إيقاف الصوتية.\n"
+                f"نوع الخطأ: {type(error).__name__}\n"
+                f"التفاصيل: {str(error)[:300]}"
             )
 
 
@@ -262,18 +410,32 @@ async def main():
             me.username
         )
 
+        # مزامنة المحادثات لتقليل مشكلات عدم معرفة
+        # معرّفات المجموعات في جلسة Pyrogram.
         logger.info(
-            "البوت جاهز لاختبار استقبال الرسائل."
+            "جارٍ مزامنة المحادثات..."
+        )
+
+        dialog_count = 0
+
+        async for dialog in app.get_dialogs(limit=200):
+            dialog_count += 1
+
+        logger.info(
+            "اكتملت مزامنة المحادثات | count=%s",
+            dialog_count
+        )
+
+        logger.info(
+            "البوت جاهز. ردي على صوتية بالأمر /play."
         )
 
         await asyncio.Event().wait()
 
     except Exception:
-
         logger.exception(
-            "حدث خطأ أثناء تشغيل الحساب"
+            "حدث خطأ أثناء تشغيل الحساب."
         )
-
         raise
 
     finally:
@@ -281,7 +443,7 @@ async def main():
             await app.stop()
 
             logger.info(
-                "تم إيقاف اتصال تيليجرام"
+                "تم إيقاف اتصال تيليجرام."
             )
 
 
@@ -296,12 +458,11 @@ if __name__ == "__main__":
 
     except KeyboardInterrupt:
         logger.info(
-            "تم إيقاف البرنامج يدويًا"
+            "تم إيقاف البرنامج يدويًا."
         )
 
     except Exception:
         logger.exception(
-            "توقف البرنامج بسبب خطأ"
+            "توقف البرنامج بسبب خطأ."
         )
-
         raise
