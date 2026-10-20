@@ -8,8 +8,7 @@ from werkzeug.serving import make_server
 
 from pyrogram import Client, filters
 from pyrogram import utils as pyrogram_utils
-from pytgcalls import PyTgCalls
-from pytgcalls import AudioPiped
+from pytgcalls import GroupCallFactory
 
 
 # =========================================================
@@ -135,7 +134,7 @@ app = Client(
     in_memory=True,
 )
 
-group_call = PyTgCalls(app)
+group_call = GroupCallFactory(app).get_group_call()
 
 
 # =========================================================
@@ -211,10 +210,9 @@ async def play_handler(client, message):
             audio_source,
         )
 
-        await group_call.join_group_call(
-            chat_id,
-            AudioPiped(audio_source),
-        )
+        # الاتصال بالمكالمة وبث الرابط الصوتي المباشر باستخدام GroupCallFactory
+        await group_call.join(chat_id)
+        group_call.input_filename = audio_source
 
         await message.reply_text(
             "🎙️ **تم بدء بث المحاضرة في المكالمة المباشرة بنجاح!**"
@@ -237,7 +235,7 @@ async def stop_handler(client, message):
             chat_id,
         )
 
-        await group_call.leave_group_call(chat_id)
+        await group_call.leave_current_group_call()
 
         await message.reply_text(
             "⏹️ **تم إيقاف البث والخروج من المكالمة المباشرة.**"
@@ -252,15 +250,5 @@ async def stop_handler(client, message):
 # 7. التشغيل الأساسي
 # =========================================================
 
-async def main():
-    await app.start()
-    await group_call.start()
-
-    me = await app.get_me()
-    logger.info("BOT_STARTED_SUCCESSFULLY | username=%s", me.username)
-
-    await asyncio.Event().wait()
-
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    app.run()
