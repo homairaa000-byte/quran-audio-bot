@@ -56,26 +56,25 @@ app = Client(
 call_py = PyTgCalls(app)
 
 # -------------------------
-# Handlers
+# Handlers with Safe Error Catching
 # -------------------------
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
 async def ping_handler(client, message):
     try:
-        await message.reply_text("pong 🟢 - بوت بث الدروس والمحاضرات جاهز!")
+        await message.reply_text("pong 🟢 - بوت بث الدروس والمحاضرات يعمل بنجاح!")
     except Exception:
         pass
 
 @app.on_message(filters.command("play") & (filters.me | filters.incoming))
 async def play_lecture_handler(client, message):
-    chat_id = message.chat.id
-    
-    args = message.text.split(maxsplit=1)
-    audio_source = args[1] if len(args) > 1 else DEFAULT_AUDIO
-
-    logger.info("STARTING_LECTURE | chat=%s | source=%s", chat_id, audio_source)
-
     try:
+        chat_id = message.chat.id
+        args = message.text.split(maxsplit=1)
+        audio_source = args[1] if len(args) > 1 else DEFAULT_AUDIO
+
+        logger.info("STARTING_LECTURE | chat=%s | source=%s", chat_id, audio_source)
+
         await call_py.join_group_call(
             chat_id,
             AudioPiped(audio_source)
@@ -90,8 +89,8 @@ async def play_lecture_handler(client, message):
 
 @app.on_message(filters.command("stop") & (filters.me | filters.incoming))
 async def stop_lecture_handler(client, message):
-    chat_id = message.chat.id
     try:
+        chat_id = message.chat.id
         await call_py.leave_group_call(chat_id)
         await message.reply_text("⏹️ **تم إيقاف بث الدرس والخروج من المكالمة.**")
     except Exception as e:
@@ -121,7 +120,7 @@ async def main():
         me = await app.get_me()
         logger.info("CONNECTED | id=%s | username=%s", me.id, me.username)
 
-        # حل مشكلة الـ Peer عبر تسخين التخزين المؤقت للمحادثات بصمت
+        # تحديث وتخزين المحادثات مؤقتاً لتجنب أخطاء الـ Peer
         try:
             async for _ in app.get_dialogs():
                 pass
