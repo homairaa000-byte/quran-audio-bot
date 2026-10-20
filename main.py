@@ -5,7 +5,7 @@ import threading
 
 from flask import Flask
 from pyrogram import Client, filters
-from pytgcalls.py_tg_calls import PyTgCalls
+from pytgcalls import PyTgCalls
 from pytgcalls.types.input_stream import AudioPiped
 
 logging.basicConfig(
@@ -56,13 +56,13 @@ app = Client(
 call_py = PyTgCalls(app)
 
 # -------------------------
-# Handlers with Safe Error Catching
+# Handlers
 # -------------------------
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
 async def ping_handler(client, message):
     try:
-        await message.reply_text("pong 🟢 - بوت بث الدروس والمحاضرات يعمل بنجاح!")
+        await message.reply_text("pong 🟢 - بوت المقرأة للدروس والمحاضرات جاهز!")
     except Exception:
         pass
 
@@ -114,21 +114,21 @@ async def heartbeat():
 
 async def main():
     try:
-        await app.start()
-        await call_py.start()
-
-        me = await app.get_me()
-        logger.info("CONNECTED | id=%s | username=%s", me.id, me.username)
-
-        # تحديث وتخزين المحادثات مؤقتاً لتجنب أخطاء الـ Peer
-        try:
-            async for _ in app.get_dialogs():
+        # تسخين التخزين المؤقت وحل مشكلة الـ Peer قبل بدء العميل
+        async with app:
+            try:
+                async for dialog in app.get_dialogs():
+                    pass
+            except Exception:
                 pass
-        except Exception:
-            pass
 
-        asyncio.create_task(heartbeat())
-        await asyncio.Event().wait()
+            await call_py.start()
+
+            me = await app.get_me()
+            logger.info("CONNECTED | id=%s | username=%s", me.id, me.username)
+
+            asyncio.create_task(heartbeat())
+            await asyncio.Event().wait()
 
     except Exception:
         logger.exception("FATAL_ERROR")
