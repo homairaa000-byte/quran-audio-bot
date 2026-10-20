@@ -5,7 +5,20 @@ import threading
 
 from flask import Flask
 from pyrogram import Client, filters
+from pyrogram import utils as pyrogram_utils
 from pytgcalls import GroupCallFactory
+
+
+# ==================================================
+# إصلاح حدود معرّفات المجموعات والقنوات في Pyrogram
+# ==================================================
+
+# بعض معرّفات القنوات الحديثة تتجاوز الحدود القديمة
+# في Pyrogram 2.0.106.
+# يجب تطبيق التعديل قبل استقبال تحديثات تيليجرام.
+
+pyrogram_utils.MIN_CHANNEL_ID = -1007852516352
+pyrogram_utils.MIN_CHAT_ID = -999999999999
 
 
 # ==================================================
@@ -273,6 +286,7 @@ async def start_stream(client, message):
                         and os.path.isfile(old_path)
                     ):
                         os.remove(old_path)
+
                 except OSError:
                     logger.exception(
                         "PREVIOUS_AUDIO_DELETE_ERROR"
@@ -314,6 +328,7 @@ async def start_stream(client, message):
 
             try:
                 await status_message.edit_text(error_text)
+
             except Exception:
                 logger.exception(
                     "PLAYBACK_ERROR_REPLY_FAILED"
@@ -327,6 +342,7 @@ async def start_stream(client, message):
                     and os.path.isfile(downloaded_path)
                 ):
                     os.remove(downloaded_path)
+
             except OSError:
                 logger.exception(
                     "FAILED_AUDIO_FILE_CLEANUP"
@@ -374,6 +390,7 @@ async def stop_stream(client, message):
                 try:
                     if os.path.isfile(current_audio_path):
                         os.remove(current_audio_path)
+
                 except OSError:
                     logger.exception(
                         "STOP_AUDIO_FILE_DELETE_ERROR"
@@ -393,6 +410,7 @@ async def stop_stream(client, message):
                     f"نوع الخطأ: {type(error).__name__}\n"
                     f"التفاصيل: {str(error)[:300]}"
                 )
+
             except Exception:
                 logger.exception(
                     "STOP_ERROR_REPLY_FAILED"
@@ -407,7 +425,12 @@ async def main():
     global active_chat_id
     global current_audio_path
 
-    logger.info("STARTING_TELEGRAM_CLIENT")
+    logger.info(
+        "STARTING_TELEGRAM_CLIENT | "
+        "MIN_CHANNEL_ID=%s | MIN_CHAT_ID=%s",
+        pyrogram_utils.MIN_CHANNEL_ID,
+        pyrogram_utils.MIN_CHAT_ID,
+    )
 
     try:
         await app.start()
@@ -453,6 +476,7 @@ async def main():
         try:
             if active_chat_id is not None:
                 await call_py.stop_audio()
+
         except Exception:
             logger.exception(
                 "FINAL_AUDIO_STOP_ERROR"
@@ -479,4 +503,53 @@ if __name__ == "__main__":
 
     except Exception:
         logger.exception("PROGRAM_TERMINATED")
-        raise
+        raise2026-10-20T10:16:32.856854924Z ==> Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance
+2026-10-20T10:17:10.518034351Z 2026-10-20 10:17:10,517 | INFO | PingTask started
+2026-10-20T10:17:10.970351319Z 2026-10-20 10:17:10,970 | INFO | Started 12 HandlerTasks
+2026-10-20T10:17:11.166672053Z 2026-10-20 10:17:11,166 | INFO | تم الاتصال بنجاح | user_id=7690444209 | username=Omahmad11112
+2026-10-20T10:17:11.166753595Z 2026-10-20 10:17:11,166 | INFO | جارٍ مزامنة المحادثات...
+2026-10-20T10:17:12.333331897Z 2026-10-20 10:17:12,333 | INFO | اكتملت مزامنة المحادثات | count=39
+2026-10-20T10:17:12.333377378Z 2026-10-20 10:17:12,333 | INFO | البوت جاهز. ردي على صوتية بالأمر /play.
+2026-10-20T10:17:13.710165752Z ==> Your service is live 🎉
+2026-10-20T10:17:13.758431985Z 2026-10-20 10:17:13,758 | INFO | 127.0.0.1 - - [20/Oct/2026 10:17:13] "GET / HTTP/1.1" 200 -
+2026-10-20T10:17:13.915448282Z ==> 
+2026-10-20T10:17:13.917675136Z ==> ///////////////////////////////////////////////////////////
+2026-10-20T10:17:13.919300565Z ==> 
+2026-10-20T10:17:13.921655773Z ==> Available at your primary URL https://quran-audio-bot-561s.onrender.com
+2026-10-20T10:17:13.923579839Z ==> 
+2026-10-20T10:17:13.925251369Z ==> ///////////////////////////////////////////////////////////
+2026-10-20T10:22:12.767244705Z ==> Detected service running on port 10000
+2026-10-20T10:22:12.904622732Z ==> Docs on specifying a port: https://render.com/docs/web-services#port-binding
+2026-10-20T10:40:48.772284084Z ==> Deploying...
+2026-10-20T10:40:48.880542273Z ==> Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance
+2026-10-20T10:41:04.149424595Z ==> Running 'python main.py'
+2026-10-20T10:41:15.459705027Z  * Serving Flask app 'main'
+2026-10-20T10:41:15.459729207Z  * Debug mode: off
+2026-10-20T10:41:15.461565632Z 2026-10-20 10:41:15,461 | INFO | quran_audio_bot | STARTING_TELEGRAM_CLIENT
+2026-10-20T10:41:15.556371594Z 2026-10-20 10:41:15,556 | INFO | werkzeug | WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+2026-10-20T10:41:15.556392844Z  * Running on all addresses (0.0.0.0)
+2026-10-20T10:41:15.556396384Z  * Running on http://127.0.0.1:10000
+2026-10-20T10:41:15.556399134Z  * Running on http://10.27.24.212:10000
+2026-10-20T10:41:15.556402054Z 2026-10-20 10:41:15,556 | INFO | werkzeug | Press CTRL+C to quit
+2026-10-20T10:41:15.653422998Z 2026-10-20 10:41:15,653 | INFO | werkzeug | 127.0.0.1 - - [20/Oct/2026 10:41:15] "HEAD / HTTP/1.1" 200 -
+2026-10-20T10:41:17.762173695Z 2026-10-20 10:41:17,761 | INFO | pyrogram.connection.connection | Connecting...
+2026-10-20T10:41:17.918902993Z 2026-10-20 10:41:17,918 | INFO | pyrogram.connection.connection | Connected! Production DC4 - IPv4
+2026-10-20T10:41:17.919370452Z 2026-10-20 10:41:17,919 | INFO | pyrogram.session.session | NetworkTask started
+2026-10-20T10:41:18.720730862Z 2026-10-20 10:41:18,718 | INFO | pyrogram.session.session | Session initialized: Layer 158
+2026-10-20T10:41:18.720759932Z 2026-10-20 10:41:18,719 | INFO | pyrogram.session.session | Device: CPython 3.11.0 - Pyrogram 2.0.106
+2026-10-20T10:41:18.720764683Z 2026-10-20 10:41:18,719 | INFO | pyrogram.session.session | System: Linux 7.0.0-1009-aws (en)
+2026-10-20T10:41:18.720810883Z 2026-10-20 10:41:18,719 | INFO | pyrogram.session.session | Session started
+2026-10-20T10:41:18.72117659Z 2026-10-20 10:41:18,721 | INFO | pyrogram.session.session | PingTask started
+2026-10-20T10:41:19.079549341Z 2026-10-20 10:41:19,079 | INFO | pyrogram.dispatcher | Started 12 HandlerTasks
+2026-10-20T10:41:19.259343218Z 2026-10-20 10:41:19,259 | INFO | quran_audio_bot | TELEGRAM_CONNECTED | user_id=7690444209 | username=Omahmad11112
+2026-10-20T10:41:19.259368318Z 2026-10-20 10:41:19,259 | INFO | quran_audio_bot | SYNCING_DIALOGS
+2026-10-20T10:41:19.983216018Z ==> Your service is live 🎉
+2026-10-20T10:41:20.076958317Z 2026-10-20 10:41:20,076 | INFO | werkzeug | 127.0.0.1 - - [20/Oct/2026 10:41:20] "GET / HTTP/1.1" 200 -
+2026-10-20T10:41:20.18269626Z ==> 
+2026-10-20T10:41:20.184996406Z ==> ///////////////////////////////////////////////////////////
+2026-10-20T10:41:20.18891622Z ==> 
+2026-10-20T10:41:20.191519243Z ==> Available at your primary URL https://quran-audio-bot-561s.onrender.com
+2026-10-20T10:41:20.194686239Z ==> 
+2026-10-20T10:41:20.19679673Z ==> ///////////////////////////////////////////////////////////
+2026-10-20T10:41:20.283360629Z 2026-10-20 10:41:20,283 | INFO | quran_audio_bot | DIALOG_SYNC_COMPLETED | count=39
+2026-10-20T10:41:20.28340128Z 2026-10-20 10:41:20,283 | INFO | quran_audio_bot | BOT_READY | account_id=7690444209 | instructions=Reply to an audio message with /play
