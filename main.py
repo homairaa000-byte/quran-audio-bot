@@ -58,7 +58,7 @@ logger.info(
 
 
 # =========================================================
-# 3. خادم الويب الخاص بـ Render
+# 3. خادم الويب الخاص بـ Render (يبدأ فوراً لمنع مهلة المنفذ)
 # =========================================================
 
 web_app = Flask(__name__)
@@ -85,6 +85,7 @@ def run_web():
             "0.0.0.0",
             port,
             web_app,
+            threaded=True
         )
 
         logger.info(
@@ -252,28 +253,8 @@ async def stop_handler(client, message):
 
 
 # =========================================================
-# 8. تشغيل التطبيق مع كتم أخطاء الـ Peer المفقودة
+# 8. التشغيل الأساسي
 # =========================================================
 
-async def main():
-    await app.start()
-
-    # تجاوز أخطاء resolve_peer التلقائية للمعرفات التالفة لمنع ظهورها بالسجلات
-    original_resolve = app.resolve_peer
-
-    async def safe_resolve(peer_id):
-        try:
-            return await original_resolve(peer_id)
-        except Exception:
-            return None
-
-    app.resolve_resolve = safe_resolve  # type: ignore
-
-    me = await app.get_me()
-    logger.info("BOT_STARTED_SUCCESSFULLY | username=%s", me.username)
-
-    await asyncio.Event().wait()
-
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    app.run()
