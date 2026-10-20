@@ -60,33 +60,29 @@ app = Client(
 )
 
 # -------------------------
-# Debug Messages
+# Listen to ALL updates (Chats + Channels)
 # -------------------------
 
-@app.on_message(filters.all)
-async def all_messages(client, message):
+@app.on_message()
+@app.on_channel_post()
+async def handle_all_updates(client, message):
     try:
+        text = message.text or message.caption or ""
+        chat_id = message.chat.id if message.chat else None
+        
         logger.info(
-            "UPDATE_RECEIVED | chat=%s | from=%s | text=%s",
-            message.chat.id if message.chat else None,
-            message.from_user.id if message.from_user else None,
-            message.text or message.caption or "<media>"
+            "UPDATE_RECEIVED | chat_id=%s | text=%s",
+            chat_id,
+            text
         )
+
+        # استجابة لأمر /ping
+        if text.strip().startswith("/ping"):
+            logger.info("PING_COMMAND_TRIGGERED")
+            await message.reply_text("pong 🟢 - البوت متصل ويستجيب بنجاح!")
+
     except Exception:
         logger.exception("UPDATE_HANDLER_ERROR")
-
-# -------------------------
-# Ping Command
-# -------------------------
-
-@app.on_message(filters.command("ping"))
-async def ping(client, message):
-    logger.info("PING_COMMAND_DETECTED")
-
-    try:
-        await message.reply_text("pong")
-    except Exception:
-        logger.exception("PING_REPLY_ERROR")
 
 # -------------------------
 # Alive Logs
@@ -112,31 +108,6 @@ async def main():
             me.id,
             me.username
         )
-
-        logger.info("SYNCING_DIALOGS")
-
-        dialogs_count = 0
-
-        try:
-            # اختبار وجلب المحادثات والمعرفات وطباعتها في السجلات
-            async for dialog in app.get_dialogs():
-                dialogs_count += 1
-                try:
-                    logger.info(
-                        "DIALOG | id=%s | title=%s",
-                        dialog.chat.id,
-                        getattr(dialog.chat, "title", "PRIVATE")
-                    )
-                except Exception:
-                    pass
-
-            logger.info(
-                "DIALOGS_SYNCED | count=%s",
-                dialogs_count
-            )
-
-        except Exception:
-            logger.exception("DIALOG_SYNC_FAILED")
 
         logger.info("READY")
 
