@@ -4,8 +4,6 @@ from threading import Thread
 from flask import Flask
 from pyrogram import Client, filters
 from pytgcalls import GroupCallFactory
-from pytgcalls.types import AudioPiped, HighQualityAudio
-from pytgcalls.types.stream import StreamAudioEnded
 
 # --- سيرفر الويب المجاني لإرضاء منصة Render ---
 web_app = Flask(__name__)
@@ -26,6 +24,7 @@ API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
+# رابط بث القرآن الكريم
 STREAM_URL = "http://stream.radiojar.com/8s44324461uvv"
 
 app = Client(
@@ -35,26 +34,14 @@ app = Client(
     session_string=SESSION_STRING
 )
 
-# التهيئة بالطريقة الصحيحة المتوافقة مع الإصدار المثبت
+# تفعيل مشغل المكالمات بالطريقة المدعومة في الإصدار المثبت
 call_py = GroupCallFactory(app).get_group_call()
-
-@call_py.on_stream_end()
-async def stream_end_handler(client, update):
-    if isinstance(update, StreamAudioEnded):
-        chat_id = update.chat_id
-        await call_py.play(
-            chat_id,
-            AudioPiped(
-                STREAM_URL,
-                audio_parameters=HighQualityAudio()
-            )
-        )
 
 @app.on_message(filters.command("play", prefixes="/") & filters.me)
 async def start_stream(client, message):
     chat_id = message.chat.id
     try:
-        await call_py.join_group_call(chat_id, AudioPiped(STREAM_URL, audio_parameters=HighQualityAudio()))
+        await call_py.join_group_call(chat_id, STREAM_URL)
         await message.edit_text("🔊 **تم بدء بث القرآن الكريم بنقاء وجودة عالية!**")
     except Exception as e:
         await message.edit_text(f"❌ حدث خطأ أثناء التشغيل: `{e}`")
