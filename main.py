@@ -5,8 +5,7 @@ import threading
 
 from flask import Flask
 from pyrogram import Client, filters
-from pytgcalls import PyTgCalls
-from pytgcalls import AudioPiped
+from pytgcalls import GroupCallFactory
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger("quran_lectures_bot")
 
 # -------------------------
-# Web Server for Render
+# Web Server for Render (Keep-Alive)
 # -------------------------
 
 web_app = Flask(__name__)
@@ -36,7 +35,7 @@ def run_web():
 threading.Thread(target=run_web, daemon=True).start()
 
 # -------------------------
-# Telegram & PyTgCalls Config
+# Telegram Config
 # -------------------------
 
 API_ID = int(os.environ["API_ID"])
@@ -53,16 +52,18 @@ app = Client(
     session_string=SESSION_STRING,
 )
 
-call_py = PyTgCalls(app)
+# تهيئة الاتصال الصوتي
+group_call_factory = GroupCallFactory(app)
+call_py = group_call_factory.get_group_call()
 
 # -------------------------
-# Handlers
+# Handlers (الأوامر والتحكم ببث الدروس)
 # -------------------------
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
 async def ping_handler(client, message):
     try:
-        await message.reply_text("pong 🟢 - بوت المقرأة للدروس والمحاضرات جاهز!")
+        await message.reply_text("pong 🟢 - بوت المقرأة للدروس والمحاضرات يعمل بنجاح!")
     except Exception:
         pass
 
@@ -75,10 +76,7 @@ async def play_lecture_handler(client, message):
 
         logger.info("STARTING_LECTURE | chat=%s | source=%s", chat_id, audio_source)
 
-        await call_py.join_group_call(
-            chat_id,
-            AudioPiped(audio_source)
-        )
+        await call_py.join_group_call(chat_id, audio_source)
         await message.reply_text("🎙️ **تم الانضمام وبدء بث المحاضرة / الدرس في المقرأة بنجاح!**")
     except Exception as e:
         logger.exception("PLAY_LECTURE_ERROR")
@@ -119,13 +117,6 @@ async def main():
 
         me = await app.get_me()
         logger.info("CONNECTED | id=%s | username=%s", me.id, me.username)
-
-        # تجاوز أي مشاكل تخص الـ Peer بصمت تام
-        try:
-            async for dialog in app.get_dialogs():
-                pass
-        except Exception:
-            pass
 
         asyncio.create_task(heartbeat())
         await asyncio.Event().wait()
