@@ -2,16 +2,18 @@ import asyncio
 import logging
 import os
 import threading
-import time
 
 from flask import Flask
+from werkzeug.serving import make_server
+
 from pyrogram import Client, filters
+from pyrogram import utils as pyrogram_utils
 from pytgcalls import GroupCallFactory
 
 
-# ==================================================
-# إعداد السجلات
-# ==================================================
+# =========================================================
+# 1. إعداد السجلات
+# =========================================================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,9 +23,27 @@ logging.basicConfig(
 logger = logging.getLogger("quran_lectures_bot")
 
 
-# ==================================================
-# إعداد خادم Render
-# ==================================================
+# =========================================================
+# 2. إصلاح حدود معرّفات القنوات في Pyrogram 2.0.106
+# =========================================================
+#
+# هذا الإصدار القديم قد يرفض بعض معرّفات القنوات الحديثة.
+# نوسّع الحد الأدنى قبل بدء العميل.
+#
+# لا نستبدل resolve_peer ولا نخفي أخطاء Pyrogram.
+# =========================================================
+
+pyrogram_utils.MIN_CHANNEL_ID = -1007852516352
+
+logger.info(
+    "PYROGRAM_CHANNEL_ID_LIMIT_UPDATED | MIN_CHANNEL_ID=%s",
+    pyrogram_utils.MIN_CHANNEL_ID,
+)
+
+
+# =========================================================
+# 3. خادم الويب الخاص بـ Render
+# =========================================================
 
 web_app = Flask(__name__)
 
@@ -35,41 +55,59 @@ def home():
 
 @web_app.route("/health")
 def health():
-    return {"status": "ok"}, 200
+    return {
+        "status": "ok",
+        "service": "quran_lectures_bot",
+    }, 200
 
 
 def run_web():
     port = int(os.environ.get("PORT", "10000"))
 
-    web_app.run(
-        host="0.0.0.0",
-        port=port,
-        use_reloader=False,
-        threaded=True,
-    )
+    try:
+        server = make_server(
+            "0.0.0.0",
+            port,
+            web_app,
+        )
+
+        logger.info(
+            "WEB_SERVER_STARTED | host=0.0.0.0 | port=%s",
+            port,
+        )
+
+        server.serve_forever()
+
+    except Exception:
+        logger.exception("WEB_SERVER_ERROR")
+        raise
 
 
-threading.Thread(
+web_thread = threading.Thread(
     target=run_web,
+    name="render-web-server",
     daemon=True,
-    name="render-health-server",
-).start()
+)
+
+web_thread.start()
 
 
-# ==================================================
-# إعدادات تيليجرام
-# ==================================================
+# =========================================================
+# 4. إعدادات تيليجرام
+# =========================================================
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
 
-DEFAULT_AUDIO = "https://server8.mp3quran.net/afs/001.mp3"
+DEFAULT_AUDIO = (
+    "https://server8.mp3quran.net/afs/001.mp3"
+)
 
 
-# ==================================================
-# إنشاء عميل Pyrogram
-# ==================================================
+# =========================================================
+# 5. إنشاء عميل Pyrogram
+# =========================================================
 
 app = Client(
     "quran_lectures_userbot",
@@ -80,18 +118,20 @@ app = Client(
 )
 
 
-# ==================================================
-# إنشاء محرك المكالمات الصوتية
-# ==================================================
+# =========================================================
+# 6. إنشاء محرك المكالمات الصوتية
+# =========================================================
 
 group_call = GroupCallFactory(app).get_group_call()
 
 
-# ==================================================
-# أمر ping
-# ==================================================
+# =========================================================
+# 7. أمر ping
+# =========================================================
 
-@app.on_message(filters.command("ping") & filters.me)
+@app.on_message(
+    filters.command("ping") & filters.me
+)
 async def ping_handler(client, message):
     logger.info(
         "PING_RECEIVED | chat_id=%s",
@@ -99,34 +139,77 @@ async def ping_handler(client, message):
     )
 
     await message.reply_text(
-        "🟢 البوت يعمل ويستقبل الأوامر بنجاح!"
+        "🟢 بوت مقرأة القرآن الكريم يعمل بنجاح!"
     )
 
 
-# ==================================================
-# أمر start
-# ==================================================
+# =========================================================
+# 8. أمر start
+# =========================================================
 
-@app.on_message(filters.command("start") & filters.me)
+@app.on_message(
+    filters.command("start") & filters.me
+)
 async def start_handler(client, message):
     await message.reply_text(
         "مرحبًا بك في بوت مقرأة القرآن الكريم.\n\n"
         "الأوامر المتاحة:\n"
         "/ping - اختبار استجابة البوت\n"
-        "/play - محاولة بدء بث الصوت\n"
-        "/stop - إيقاف البث"
+        "/play - بدء بث المحاضرة\n"
+        "/stop - إيقاف البث\n"
+        "/status - فحص حالة الاتصال"
     )
 
 
-# ==================================================
-# أمر play
-# ==================================================
+# =========================================================
+# 9. أمر status
+# =========================================================
 
-@app.on_message(filters.command("play") & filters.me)
+@app.on_message(
+    filters.command("status") & filters.me
+)
+async def status_handler(client, message):
+    try:
+        me = await client.get_me()
+
+        username = (
+            f"@{me.username}"
+            if me.username
+            else "غير محدد"
+        )
+
+        await message.reply_text(
+            "🟢 الحساب متصل بتيليجرام.\n"
+            f"معرّف الحساب: {me.id}\n"
+            f"اسم المستخدم: {username}"
+        )
+
+        logger.info(
+            "STATUS_OK | user_id=%s",
+            me.id,
+        )
+
+    except Exception as exc:
+        logger.exception("STATUS_ERROR")
+
+        await message.reply_text(
+            "❌ تعذر فحص الحالة.\n"
+            f"{type(exc).__name__}: {str(exc)[:400]}"
+        )
+
+
+# =========================================================
+# 10. أمر play
+# =========================================================
+
+@app.on_message(
+    filters.command("play") & filters.me
+)
 async def play_handler(client, message):
     chat_id = message.chat.id
 
     args = message.text.split(maxsplit=1)
+
     audio_source = (
         args[1].strip()
         if len(args) > 1
@@ -141,14 +224,15 @@ async def play_handler(client, message):
 
     try:
         await message.reply_text(
-            "⏳ وصل أمر التشغيل، جارٍ التحقق من إمكانية بدء البث..."
+            "⏳ جارٍ الاتصال بالمكالمة الصوتية "
+            "وتشغيل المحاضرة..."
         )
 
-        # الانضمام إلى المكالمة الصوتية في المجموعة
+        # الانضمام إلى المكالمة الصوتية
         await group_call.join(chat_id)
 
-        # تشغيل المصدر الصوتي باستخدام واجهة الإصدار المحدد
-        await group_call.start(audio_source)
+        # بدء بث الصوت
+        await group_call.start_audio(audio_source)
 
         logger.info(
             "PLAY_STARTED | chat_id=%s",
@@ -156,8 +240,9 @@ async def play_handler(client, message):
         )
 
         await message.reply_text(
-            "🎙️ تمت معالجة أمر التشغيل. "
-            "تحققي من انضمام الحساب إلى المكالمة وسماع الصوت."
+            "🎙️ تم إرسال طلب تشغيل المحاضرة.\n"
+            "تحققي من انضمام الحساب إلى المكالمة "
+            "وسماع الصوت."
         )
 
     except Exception as exc:
@@ -168,16 +253,18 @@ async def play_handler(client, message):
 
         await message.reply_text(
             "❌ تعذر تشغيل المحاضرة.\n"
-            f"نوع الخطأ: {type(exc).__name__}\n"
-            f"التفاصيل: {str(exc)[:700]}"
+            f"الخطأ: {type(exc).__name__}\n"
+            f"التفاصيل: {str(exc)[:600]}"
         )
 
 
-# ==================================================
-# أمر stop
-# ==================================================
+# =========================================================
+# 11. أمر stop
+# =========================================================
 
-@app.on_message(filters.command("stop") & filters.me)
+@app.on_message(
+    filters.command("stop") & filters.me
+)
 async def stop_handler(client, message):
     chat_id = message.chat.id
 
@@ -187,10 +274,19 @@ async def stop_handler(client, message):
     )
 
     try:
-        await group_call.stop()
+        # إيقاف مصدر الصوت
+        await group_call.stop_audio()
+
+        # مغادرة المكالمة
+        await group_call.leave()
+
+        logger.info(
+            "PLAY_STOPPED | chat_id=%s",
+            chat_id,
+        )
 
         await message.reply_text(
-            "⏹️ تمت محاولة إيقاف بث الصوت."
+            "⏹️ تم إيقاف بث الصوت ومغادرة المكالمة."
         )
 
     except Exception as exc:
@@ -201,35 +297,55 @@ async def stop_handler(client, message):
 
         await message.reply_text(
             "❌ تعذر إيقاف البث.\n"
-            f"نوع الخطأ: {type(exc).__name__}\n"
+            f"الخطأ: {type(exc).__name__}\n"
             f"التفاصيل: {str(exc)[:500]}"
         )
 
 
-# ==================================================
-# تسجيل الأخطاء غير المتوقعة في استقبال الرسائل
-# ==================================================
+# =========================================================
+# 12. تحميل معلومات المحادثات
+# =========================================================
 
-@app.on_message(filters.command("status") & filters.me)
-async def status_handler(client, message):
-    me = await client.get_me()
+async def warm_up_dialogs():
+    """
+    تحميل معلومات المحادثات إلى مخزن Pyrogram.
+    يساعد ذلك على توفير بيانات المحادثات اللازمة
+    لحل معرّفات المجموعات والقنوات.
+    """
 
-    await message.reply_text(
-        "🟢 حالة الاتصال:\n"
-        f"معرّف الحساب: {me.id}\n"
-        f"اسم المستخدم: @{me.username}"
-        if me.username
-        else
-        "🟢 الحساب متصل بتيليجرام."
-    )
+    logger.info("DIALOGS_LOADING_STARTED")
+
+    count = 0
+
+    try:
+        async for dialog in app.get_dialogs():
+            count += 1
+
+        logger.info(
+            "DIALOGS_LOADING_FINISHED | count=%s",
+            count,
+        )
+
+    except Exception:
+        logger.exception("DIALOGS_LOADING_ERROR")
 
 
-# ==================================================
-# تشغيل البوت
-# ==================================================
+# =========================================================
+# 13. مراقبة عمل البوت
+# =========================================================
+
+async def heartbeat():
+    while True:
+        logger.info("BOT_ALIVE")
+        await asyncio.sleep(60)
+
+
+# =========================================================
+# 14. التشغيل الرئيسي
+# =========================================================
 
 async def main():
-    logger.info("STARTING_BOT")
+    logger.info("BOT_STARTING")
 
     try:
         await app.start()
@@ -242,8 +358,14 @@ async def main():
             me.username,
         )
 
-        logger.info(
-            "BOT_READY | waiting_for_commands"
+        # تحميل معلومات المحادثات
+        await warm_up_dialogs()
+
+        logger.info("BOT_READY | waiting_for_commands")
+
+        asyncio.create_task(
+            heartbeat(),
+            name="bot-heartbeat",
         )
 
         await asyncio.Event().wait()
@@ -254,10 +376,15 @@ async def main():
 
     finally:
         try:
-            await app.stop()
+            if app.is_connected:
+                await app.stop()
+
         except Exception:
             logger.exception("APP_STOP_ERROR")
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# =========================================================
+# 15. نقطة الدخول
+# =========================================================
+
+if __name__ == "__main
