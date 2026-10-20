@@ -8,8 +8,8 @@ from werkzeug.serving import make_server
 
 from pyrogram import Client, filters
 from pyrogram import utils as pyrogram_utils
-from pytgcalls import GroupCallFactory
-from pytgcalls.types.input_stream import AudioPiped
+from pytgcalls import PyTgCalls
+from pytgcalls import AudioPiped
 
 
 # =========================================================
@@ -124,7 +124,7 @@ DEFAULT_AUDIO = (
 
 
 # =========================================================
-# 5. إنشاء عميل Pyrogram
+# 5. إنشاء عميل Pyrogram ومحرك المكالمات
 # =========================================================
 
 app = Client(
@@ -135,16 +135,11 @@ app = Client(
     in_memory=True,
 )
 
-
-# =========================================================
-# 6. إنشاء محرك المكالمات الصوتية بالطريقة الصحيحة
-# =========================================================
-
-group_call = GroupCallFactory(app).get_group_call()
+group_call = PyTgCalls(app)
 
 
 # =========================================================
-# 7. الأوامر (ping, start, status, play, stop)
+# 6. الأوامر (ping, start, status, play, stop)
 # =========================================================
 
 @app.on_message(
@@ -216,9 +211,10 @@ async def play_handler(client, message):
             audio_source,
         )
 
-        # استخدام الطريقة الصحيحة المتوافقة مع GroupCallFactory للبث والصوت
-        await group_call.join(chat_id)
-        await group_call.input_stream(AudioPiped(audio_source))
+        await group_call.join_group_call(
+            chat_id,
+            AudioPiped(audio_source),
+        )
 
         await message.reply_text(
             "🎙️ **تم بدء بث المحاضرة في المكالمة المباشرة بنجاح!**"
@@ -241,7 +237,7 @@ async def stop_handler(client, message):
             chat_id,
         )
 
-        await group_call.leave(chat_id)
+        await group_call.leave_group_call(chat_id)
 
         await message.reply_text(
             "⏹️ **تم إيقاف البث والخروج من المكالمة المباشرة.**"
@@ -253,8 +249,18 @@ async def stop_handler(client, message):
 
 
 # =========================================================
-# 8. التشغيل الأساسي
+# 7. التشغيل الأساسي
 # =========================================================
 
+async def main():
+    await app.start()
+    await group_call.start()
+
+    me = await app.get_me()
+    logger.info("BOT_STARTED_SUCCESSFULLY | username=%s", me.username)
+
+    await asyncio.Event().wait()
+
+
 if __name__ == "__main__":
-    app.run()
+    asyncio.run(main())
