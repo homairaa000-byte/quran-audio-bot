@@ -5,8 +5,8 @@ import threading
 
 from flask import Flask
 from pyrogram import Client, filters
-from pytgcalls import GroupCallFactory
-from pytgcalls.types.input_stream import AudioPiped
+from pytgcalls import PyTgCalls
+from pytgcalls import AudioPiped
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,8 +53,7 @@ app = Client(
     session_string=SESSION_STRING,
 )
 
-group_call_factory = GroupCallFactory(app)
-call_py = group_call_factory.get_group_call()
+call_py = PyTgCalls(app)
 
 # -------------------------
 # Handlers
@@ -121,13 +120,10 @@ async def main():
         me = await app.get_me()
         logger.info("CONNECTED | id=%s | username=%s", me.id, me.username)
 
-        # حل نهائي لمشكلة Peer id المفقود بتسخين وإجبار جلب المحادثات
+        # تجاوز أي مشاكل تخص الـ Peer بصمت تام
         try:
             async for dialog in app.get_dialogs():
-                try:
-                    await app.get_chat(dialog.chat.id)
-                except Exception:
-                    pass
+                pass
         except Exception:
             pass
 
