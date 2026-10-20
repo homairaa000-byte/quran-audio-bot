@@ -13,7 +13,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-logger = logging.getLogger("quran_userbot")
+logger = logging.getLogger("quran_lectures_bot")
 
 # -------------------------
 # Web Server for Render
@@ -23,7 +23,7 @@ web_app = Flask(__name__)
 
 @web_app.route("/")
 def home():
-    return "Quran Audio Userbot Running", 200
+    return "Quran Lectures Userbot Running", 200
 
 @web_app.route("/health")
 def health():
@@ -42,7 +42,9 @@ threading.Thread(target=run_web, daemon=True).start()
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
-STREAM_URL = "http://stream.radiojar.com/8s44324461uvv"  # رابط إذاعة القرآن الكريم
+
+# رابط افتراضي لدرس قرآن أو بث تسجيل المقرأة (يمكنكِ تغييره أو تشغيل أي رابط صوتي)
+DEFAULT_AUDIO = "https://server8.mp3quran.net/afs/001.mp3"
 
 app = Client(
     "fresh_userbot_v3",
@@ -54,43 +56,48 @@ app = Client(
 call_py = PyTgCalls(app)
 
 # -------------------------
-# Handlers
+# Handlers (الأوامر والتحكم بالدروس)
 # -------------------------
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
 async def ping_handler(client, message):
-    logger.info("PING_DETECTED")
     try:
-        await message.reply_text("pong 🟢 - البوت يعمل ويستجيب بنجاح!")
+        await message.reply_text("pong 🟢 - بوت بث الدروس والمحاضرات جاهز للعمل!")
     except Exception:
         pass
 
 @app.on_message(filters.command("play") & (filters.me | filters.incoming))
-async def play_handler(client, message):
+async def play_lecture_handler(client, message):
     chat_id = message.chat.id
-    logger.info("PLAY_COMMAND_DETECTED | chat=%s", chat_id)
+    
+    # التأكد هل أرسل المستخدم رابطاً أم نستخدم التسجيل الافتراضي
+    args = message.text.split(maxsplit=1)
+    audio_source = args[1] if len(args) > 1 else DEFAULT_AUDIO
+
+    logger.info("STARTING_LECTURE | chat=%s | source=%s", chat_id, audio_source)
+
     try:
         await call_py.join_group_call(
             chat_id,
-            AudioPiped(STREAM_URL)
+            AudioPiped(audio_source)
         )
-        await message.reply_text("🔊 تم بدء بث إذاعة القرآن الكريم بنجاح!")
+        await message.reply_text("🎙️ **بدأ بث المحاضرة / الدرس بنجاح في المحادثة المباشرة!**")
     except Exception as e:
-        logger.exception("PLAY_ERROR")
+        logger.exception("PLAY_LECTURE_ERROR")
         try:
-            await message.reply_text(f"❌ حدث خطأ أثناء الانضمام: {e}")
+            await message.reply_text(f"❌ تعذر بدء بث الدرس: {e}")
         except Exception:
             pass
 
 @app.on_message(filters.command("stop") & (filters.me | filters.incoming))
-async def stop_handler(client, message):
+async def stop_lecture_handler(client, message):
     chat_id = message.chat.id
     try:
         await call_py.leave_group_call(chat_id)
-        await message.reply_text("⏹ تم إيقاف البث والخروج من المكالمة.")
+        await message.reply_text("⏹️ **تم إيقاف بث الدرس والخروج من المحادثة المباشرة.**")
     except Exception as e:
         try:
-            await message.reply_text(f"❌ خطأ: {e}")
+            await message.reply_text(f"❌ خطأ عند الخروج: {e}")
         except Exception:
             pass
 
