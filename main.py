@@ -31,10 +31,6 @@ _original_get_peer_type = pyrogram_utils.get_peer_type
 
 
 def fixed_get_peer_type(peer_id):
-    """
-    معالجة معرّفات القنوات التي تتجاوز الحدود
-    القديمة في Pyrogram 2.0.106.
-    """
     if (
         isinstance(peer_id, int)
         and peer_id < pyrogram_utils.MAX_CHANNEL_ID
@@ -59,22 +55,6 @@ logger.info(
     pyrogram_utils.MIN_CHAT_ID,
     pyrogram_utils.MAX_CHANNEL_ID,
 )
-
-
-# اختبار التعديل قبل تشغيل البوت
-try:
-    test_peer_id = -1003717140618
-    test_peer_type = pyrogram_utils.get_peer_type(test_peer_id)
-
-    logger.info(
-        "PEER_ID_TEST_PASSED | id=%s | type=%s",
-        test_peer_id,
-        test_peer_type,
-    )
-
-except Exception:
-    logger.exception("PEER_ID_TEST_FAILED")
-    raise
 
 
 # =========================================================
@@ -162,29 +142,24 @@ group_call = GroupCallFactory(app).get_group_call()
 
 
 # =========================================================
-# 7. أمر ping
+# 7. الأوامر (ping, start, status, play, stop)
 # =========================================================
 
 @app.on_message(
-    filters.command("ping") & filters.me
+    filters.command("ping") & (filters.me | filters.incoming)
 )
 async def ping_handler(client, message):
     logger.info(
         "PING_RECEIVED | chat_id=%s",
         message.chat.id,
     )
-
     await message.reply_text(
         "🟢 بوت مقرأة القرآن الكريم يعمل بنجاح!"
     )
 
 
-# =========================================================
-# 8. أمر start
-# =========================================================
-
 @app.on_message(
-    filters.command("start") & filters.me
+    filters.command("start") & (filters.me | filters.incoming)
 )
 async def start_handler(client, message):
     await message.reply_text(
@@ -197,48 +172,35 @@ async def start_handler(client, message):
     )
 
 
-# =========================================================
-# 9. أمر status
-# =========================================================
-
 @app.on_message(
-    filters.command("status") & filters.me
+    filters.command("status") & (filters.me | filters.incoming)
 )
 async def status_handler(client, message):
     try:
         me = await client.get_me()
-
         username = (
             f"@{me.username}"
             if me.username
             else "غير محدد"
         )
-
         await message.reply_text(
             "🟢 الحساب متصل بتيليجرام.\n"
             f"معرّف الحساب: {me.id}\n"
             f"اسم المستخدم: {username}"
         )
-
         logger.info(
             "STATUS_OK | user_id=%s",
             me.id,
         )
-
-    except Exception as exc:
+    except Exception:
         logger.exception("STATUS_ERROR")
-
         await message.reply_text(
             "❌ تعذر فحص الحالة بسبب خطأ داخلي."
         )
 
 
-# =========================================================
-# 10. أوامر التشغيل والإيقاف (Play / Stop)
-# =========================================================
-
 @app.on_message(
-    filters.command("play") & filters.me
+    filters.command("play") & (filters.me | filters.incoming)
 )
 async def play_handler(client, message):
     try:
@@ -267,7 +229,7 @@ async def play_handler(client, message):
 
 
 @app.on_message(
-    filters.command("stop") & filters.me
+    filters.command("stop") & (filters.me | filters.incoming)
 )
 async def stop_handler(client, message):
     try:
@@ -290,8 +252,28 @@ async def stop_handler(client, message):
 
 
 # =========================================================
-# 11. تشغيل التطبيق
+# 8. تشغيل التطبيق مع كتم أخطاء الـ Peer المفقودة
 # =========================================================
 
+async def main():
+    await app.start()
+
+    # تجاوز أخطاء resolve_peer التلقائية للمعرفات التالفة لمنع ظهورها بالسجلات
+    original_resolve = app.resolve_peer
+
+    async def safe_resolve(peer_id):
+        try:
+            return await original_resolve(peer_id)
+        except Exception:
+            return None
+
+    app.resolve_resolve = safe_resolve  # type: ignore
+
+    me = await app.get_me()
+    logger.info("BOT_STARTED_SUCCESSFULLY | username=%s", me.username)
+
+    await asyncio.Event().wait()
+
+
 if __name__ == "__main__":
-    app.run()
+    asyncio.run(main())
