@@ -2,22 +2,13 @@ import asyncio
 import logging
 import os
 import threading
+import time
+import uuid
 
 from flask import Flask
 from pyrogram import Client, filters
 from pyrogram import utils as pyrogram_utils
 from pytgcalls import GroupCallFactory
-
-
-# ==================================================
-# معالجة حدود معرّفات مجموعات وقنوات تيليجرام
-# ==================================================
-
-# توافق مع معرّفات القنوات الحديثة في Pyrogram 2.0.106.
-# يجب تنفيذ ذلك قبل استقبال تحديثات تيليجرام.
-
-pyrogram_utils.MIN_CHANNEL_ID = -1007852516352
-pyrogram_utils.MIN_CHAT_ID = -999999999999
 
 
 # ==================================================
@@ -33,7 +24,15 @@ logger = logging.getLogger("quran_audio_bot")
 
 
 # ==================================================
-# خادم Render
+# إعداد معرّفات المحادثات في Pyrogram
+# ==================================================
+
+pyrogram_utils.MIN_CHANNEL_ID = -1007852516352
+pyrogram_utils.MIN_CHAT_ID = -999999999999
+
+
+# ==================================================
+# خادم الويب الخاص بـ Render
 # ==================================================
 
 web_app = Flask(__name__)
@@ -76,8 +75,8 @@ SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
 if not API_ID or not API_HASH or not SESSION_STRING:
     raise RuntimeError(
-        "تأكدي من وجود API_ID وAPI_HASH وSESSION_STRING "
-        "في Environment داخل Render."
+        "تأكدي من ضبط API_ID وAPI_HASH وSESSION_STRING "
+        "داخل Environment في Render."
     )
 
 
@@ -97,14 +96,11 @@ app = Client(
 # إنشاء مشغل الملفات الصوتية
 # ==================================================
 
-group_call_factory = GroupCallFactory(
+call_py = GroupCallFactory(
     app,
     enable_logs_to_console=True,
-)
-
-# استخدام مشغل الملفات، وليس مشغلًا عامًا غير مناسب.
-call_py = group_call_factory.get_file_group_call(
-    play_on_repeat=False
+).get_file_group_call(
+    play_on_repeat=False,
 )
 
 
@@ -139,6 +135,23 @@ def get_audio_message(message):
             return True
 
     return False
+
+
+# ==================================================
+# حذف الملفات المؤقتة بأمان
+# ==================================================
+
+def delete_file(path):
+    if not path:
+        return
+
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+            logger.info("TEMP_FILE_DELETED | path=%s", path)
+
+    except OSError:
+        logger.exception("TEMP_FILE_DELETE_FAILED | path=%s", path)
 
 
 # ==================================================
@@ -189,38 +202,39 @@ async def start_stream(client, message):
         message.id,
     )
 
-    # يجب أن يكون الأمر ردًا على الصوتية المطلوبة.
     audio_message = message.reply_to_message
 
     if audio_message is None:
         await message.reply_text(
             "⚠️ لتشغيل صوتية الدرس:\n\n"
-            "1. اختاري رسالة الصوتية.\n"
-            "2. اضغطي على «رد» عليها.\n"
+            "1. اختاري الصوتية المطلوبة.\n"
+            "2. اضغطي على «رد» على الصوتية.\n"
             "3. أرسلي /play."
         )
         return
 
     if not get_audio_message(audio_message):
         await message.reply_text(
-            "❌ الرسالة التي رددتِ عليها ليست صوتية "
-            "أو ملفًا صوتيًا مدعومًا.\n\n"
+            "❌ الرسالة التي رددتِ عليها ليست ملفًا صوتيًا مدعومًا.\n\n"
             "ردّي على الصوتية المطلوبة ثم أرسلي /play."
         )
         return
 
     async with playback_lock:
         status_message = await message.reply_text(
-            "⏳ جارٍ تجهيز الصوتية..."
+            "⏳ جارٍ تحميل الصوتية وتجهيزها..."
         )
 
         downloaded_path = None
 
         try:
-            # تحميل الملف الصوتي إلى مساحة مؤقتة.
+            # ------------------------------------------
+            # تحميل الصوتية المطلوبة
+            # ------------------------------------------
+
             downloaded_path = await client.download_media(
                 audio_message,
-                file_name="/tmp/",
+                file_name=f"/tmp/quran_audio_{uuid.uuid4().hex}_",
             )
 
             if not downloaded_path:
@@ -230,55 +244,57 @@ async def start_stream(client, message):
 
             if not os.path.isfile(downloaded_path):
                 raise FileNotFoundError(
-                    "ملف الصوتية غير موجود بعد التحميل."
+                    f"الملف غير موجود بعد التحميل: {downloaded_path}"
                 )
 
-            if os.path.getsize(downloaded_path) == 0:
-                raise RuntimeError(
-                    "حجم ملف الصوتية صفر."
-                )
+            file_size = os.path.getsize(downloaded_path)
+
+            if file_size <= 0:
+                raise RuntimeError("الملف الصوتي فارغ.")
 
             logger.info(
                 "AUDIO_DOWNLOADED | chat_id=%s | "
                 "path=%s | size=%s",
                 chat_id,
                 downloaded_path,
-                os.path.getsize(downloaded_path),
+                file_size,
             )
 
-            # منع تشغيل الصوتية في مجموعة أخرى في الوقت نفسه.
+            # ------------------------------------------
+            # لا نشغل المشغل في مجموعتين معًا
+            # ------------------------------------------
+
             if (
                 active_chat_id is not None
                 and active_chat_id != chat_id
             ):
                 raise RuntimeError(
-                    "المشغل مستخدم حاليًا في مجموعة أخرى. "
+                    "المشغل يعمل في مجموعة أخرى. "
                     "أوقفي التشغيل هناك أولًا."
                 )
 
-            # إذا كان المشغل متصلًا بمجموعة أخرى فلا نغيّر الملف.
-            # أما إذا كان متصلًا بالمجموعة نفسها، فيمكن تغيير الملف.
-            if call_py.is_connected:
-                if active_chat_id != chat_id:
-                    raise RuntimeError(
-                        "المشغل متصل بمحادثة صوتية أخرى. "
-                        "أوقفي الاتصال السابق أولًا."
-                    )
+            # ------------------------------------------
+            # إذا كان المشغل متصلًا بالمجموعة نفسها،
+            # نوقف الملف السابق قبل استبداله.
+            # ------------------------------------------
 
-                # إيقاف تشغيل الملف السابق قبل تغييره.
+            if call_py.is_connected:
                 call_py.stop_playout()
 
-            # تعيين الملف الذي سيشغّله مشغل الملفات.
+                # نمنح المشغل وقتًا قصيرًا لتحرير الملف السابق.
+                await asyncio.sleep(0.3)
+
+            # ------------------------------------------
+            # تحديد الملف الذي سيشغله المشغل
+            # ------------------------------------------
+
             call_py.input_filename = downloaded_path
 
-            logger.info(
-                "AUDIO_FILE_SET | chat_id=%s | file=%s",
-                chat_id,
-                downloaded_path,
-            )
+            # ------------------------------------------
+            # الانضمام إلى المحادثة الصوتية
+            # عند عدم وجود اتصال سابق
+            # ------------------------------------------
 
-            # start(chat_id) يتولى بدء الاتصال بالمحادثة الصوتية.
-            # لا نستخدم join() أو start_audio() هنا.
             if not call_py.is_connected:
                 logger.info(
                     "JOINING_VOICE_CHAT | chat_id=%s",
@@ -287,25 +303,36 @@ async def start_stream(client, message):
 
                 await call_py.start(chat_id)
 
-                active_chat_id = chat_id
-
                 logger.info(
-                    "VOICE_CHAT_CONNECTED | chat_id=%s",
+                    "VOICE_CHAT_START_REQUESTED | chat_id=%s",
                     chat_id,
                 )
 
+            active_chat_id = chat_id
+
+            # ------------------------------------------
+            # تحديث الملف النشط وحذف الملف السابق
+            # ------------------------------------------
+
+            old_path = current_audio_path
             current_audio_path = downloaded_path
 
+            downloaded_path = None
+
+            if old_path and old_path != current_audio_path:
+                delete_file(old_path)
+
             await status_message.edit_text(
-                "🔊 تم إرسال طلب تشغيل الصوتية.\n"
-                "إذا كانت المحادثة الصوتية مفتوحة، "
-                "فمن المفترض أن يبدأ التشغيل."
+                "🔊 تم تجهيز الصوتية وإرسالها إلى المشغل.\n\n"
+                "إذا لم تسمعي الصوت، تأكدي من أن "
+                "المحادثة الصوتية مفتوحة وأن الحساب "
+                "مسموح له بالانضمام."
             )
 
             logger.info(
-                "AUDIO_START_REQUESTED | chat_id=%s | file=%s",
+                "AUDIO_PLAYBACK_CONFIGURED | chat_id=%s | file=%s",
                 chat_id,
-                downloaded_path,
+                current_audio_path,
             )
 
         except Exception as error:
@@ -314,31 +341,26 @@ async def start_stream(client, message):
                 chat_id,
             )
 
-            # تنظيف الملف الجديد إذا لم يصبح الملف النشط.
-            try:
-                if (
-                    downloaded_path
-                    and downloaded_path != current_audio_path
-                    and os.path.isfile(downloaded_path)
-                ):
-                    os.remove(downloaded_path)
-
-            except OSError:
-                logger.exception("AUDIO_CLEANUP_FAILED")
-
             error_text = (
                 "❌ تعذّر تشغيل الصوتية.\n\n"
                 f"نوع الخطأ: {type(error).__name__}\n"
-                f"التفاصيل: {str(error)[:350]}"
+                f"التفاصيل: {str(error)[:400]}\n\n"
+                "تأكدي من فتح المحادثة الصوتية "
+                "وإمكانية انضمام الحساب إليها."
             )
 
             try:
                 await status_message.edit_text(error_text)
 
             except Exception:
-                logger.exception(
-                    "PLAYBACK_ERROR_REPLY_FAILED"
-                )
+                logger.exception("PLAYBACK_ERROR_REPLY_FAILED")
+
+            # حذف الملف الجديد إذا لم يصبح الملف النشط.
+            if (
+                downloaded_path
+                and downloaded_path != current_audio_path
+            ):
+                delete_file(downloaded_path)
 
 
 # ==================================================
@@ -367,31 +389,25 @@ async def stop_stream(client, message):
             return
 
         try:
-            # إيقاف تشغيل الملف فقط.
-            # يظل الاتصال بالمحادثة الصوتية قائمًا
-            # حتى يمكن تشغيل ملف آخر لاحقًا.
+            # إيقاف الملف فقط مع إبقاء اتصال المحادثة الصوتية.
             call_py.stop_playout()
+
+            await asyncio.sleep(0.3)
+
+            old_path = current_audio_path
+            current_audio_path = None
+
+            if old_path:
+                delete_file(old_path)
+
+            await message.reply_text(
+                "⏹ تم إيقاف الصوتية."
+            )
 
             logger.info(
                 "AUDIO_STOPPED | chat_id=%s",
                 chat_id,
             )
-
-            await message.reply_text(
-                "⏹ تم إرسال طلب إيقاف الصوتية."
-            )
-
-            if current_audio_path:
-                try:
-                    if os.path.isfile(current_audio_path):
-                        os.remove(current_audio_path)
-
-                except OSError:
-                    logger.exception(
-                        "STOP_AUDIO_FILE_DELETE_ERROR"
-                    )
-
-                current_audio_path = None
 
         except Exception as error:
             logger.exception(
@@ -399,17 +415,11 @@ async def stop_stream(client, message):
                 chat_id,
             )
 
-            try:
-                await message.reply_text(
-                    "❌ تعذّر إيقاف الصوتية.\n"
-                    f"نوع الخطأ: {type(error).__name__}\n"
-                    f"التفاصيل: {str(error)[:300]}"
-                )
-
-            except Exception:
-                logger.exception(
-                    "STOP_ERROR_REPLY_FAILED"
-                )
+            await message.reply_text(
+                "❌ تعذّر إيقاف الصوتية.\n"
+                f"الخطأ: {type(error).__name__}\n"
+                f"{str(error)[:250]}"
+            )
 
 
 # ==================================================
@@ -421,8 +431,8 @@ async def main():
     global current_audio_path
 
     logger.info(
-        "STARTING_TELEGRAM_CLIENT | MIN_CHANNEL_ID=%s | "
-        "MIN_CHAT_ID=%s",
+        "STARTING_TELEGRAM_CLIENT | "
+        "MIN_CHANNEL_ID=%s | MIN_CHAT_ID=%s",
         pyrogram_utils.MIN_CHANNEL_ID,
         pyrogram_utils.MIN_CHAT_ID,
     )
@@ -438,6 +448,7 @@ async def main():
             me.username,
         )
 
+        # مزامنة المحادثات لتحديث بيانات المجموعات.
         logger.info("SYNCING_DIALOGS")
 
         dialog_count = 0
@@ -456,6 +467,7 @@ async def main():
             me.id,
         )
 
+        # إبقاء البرنامج يعمل.
         await asyncio.Event().wait()
 
     except Exception:
@@ -465,6 +477,7 @@ async def main():
     finally:
         try:
             if call_py.is_connected:
+                call_py.stop_playout()
                 await call_py.stop()
 
         except Exception:
@@ -472,7 +485,11 @@ async def main():
 
         if app.is_connected:
             await app.stop()
+
             logger.info("TELEGRAM_CLIENT_STOPPED")
+
+        if current_audio_path:
+            delete_file(current_audio_path)
 
 
 # ==================================================
