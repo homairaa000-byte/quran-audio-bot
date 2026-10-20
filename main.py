@@ -7,22 +7,22 @@ from pytgcalls import PyTgCalls
 from pytgcalls.types import AudioPiped, HighQualityAudio
 from pytgcalls.types.stream import StreamAudioEnded
 
-# --- خدعة سيرفر الويب لضمان بقاء البوت مجاناً على Render ---
+# --- سيرفر الويب لضمان بقاء الخدمة مجانية على Render ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "البوت يعمل بنجاح 24/7!"
+    return "Bot is active 24/7!"
 
 def run_web():
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))
     web_app.run(host="0.0.0.0", port=port)
 
-# تشغيل سيرفر الويب في مسار منفصل (Thread)
+# تشغيل سيرفر الويب في الخلفية
 Thread(target=run_web, daemon=True).start()
-# ----------------------------------------------------
+# --------------------------------------------------
 
-# قراءة البيانات من متغيرات البيئة
+# قراءة المتغيرات
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
@@ -77,7 +77,7 @@ async def stop_stream(client, message):
 async def main():
     await app.start()
     await call_py.start()
-    print("✅ البوت وسيرفر الويب يعملان بنجاح!")
+    print("✅ البوت وسيرفر الويب يعملان بنجاح وبدون توقف!")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
