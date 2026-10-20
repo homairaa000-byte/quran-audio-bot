@@ -118,8 +118,17 @@ async def main():
         dialogs_count = 0
 
         try:
+            # اختبار وجلب المحادثات والمعرفات وطباعتها في السجلات
             async for dialog in app.get_dialogs():
                 dialogs_count += 1
+                try:
+                    logger.info(
+                        "DIALOG | id=%s | title=%s",
+                        dialog.chat.id,
+                        getattr(dialog.chat, "title", "PRIVATE")
+                    )
+                except Exception:
+                    pass
 
             logger.info(
                 "DIALOGS_SYNCED | count=%s",
