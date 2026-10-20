@@ -9,6 +9,7 @@ from werkzeug.serving import make_server
 from pyrogram import Client, filters
 from pyrogram import utils as pyrogram_utils
 from pytgcalls import GroupCallFactory
+from pytgcalls.types.input_stream import AudioPiped
 
 
 # =========================================================
@@ -58,7 +59,7 @@ logger.info(
 
 
 # =========================================================
-# 3. خادم الويب الخاص بـ Render (يبدأ فوراً لمنع مهلة المنفذ)
+# 3. خادم الويب الخاص بـ Render
 # =========================================================
 
 web_app = Flask(__name__)
@@ -136,7 +137,7 @@ app = Client(
 
 
 # =========================================================
-# 6. إنشاء محرك المكالمات الصوتية
+# 6. إنشاء محرك المكالمات الصوتية بالطريقة الصحيحة
 # =========================================================
 
 group_call = GroupCallFactory(app).get_group_call()
@@ -215,10 +216,9 @@ async def play_handler(client, message):
             audio_source,
         )
 
-        await group_call.join_group_call(
-            chat_id,
-            audio_source,
-        )
+        # استخدام الطريقة الصحيحة المتوافقة مع GroupCallFactory للبث والصوت
+        await group_call.join(chat_id)
+        await group_call.input_stream(AudioPiped(audio_source))
 
         await message.reply_text(
             "🎙️ **تم بدء بث المحاضرة في المكالمة المباشرة بنجاح!**"
@@ -241,7 +241,7 @@ async def stop_handler(client, message):
             chat_id,
         )
 
-        await group_call.leave_group_call(chat_id)
+        await group_call.leave(chat_id)
 
         await message.reply_text(
             "⏹️ **تم إيقاف البث والخروج من المكالمة المباشرة.**"
