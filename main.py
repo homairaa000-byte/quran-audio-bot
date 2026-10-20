@@ -6,7 +6,7 @@ import threading
 from flask import Flask
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
-from pytgcalls.types import AudioPiped
+from pytgcalls import Stream
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +43,7 @@ API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
 
-# رابط افتراضي لدرس قرآن أو بث تسجيل المقرأة (يمكنكِ تغييره أو تشغيل أي رابط صوتي)
+# رابط بث الدرس أو تسجيلات المقرأة (يمكنك تغييره بأي رابط صوتي مباشر للمحاضرة)
 DEFAULT_AUDIO = "https://server8.mp3quran.net/afs/001.mp3"
 
 app = Client(
@@ -56,13 +56,13 @@ app = Client(
 call_py = PyTgCalls(app)
 
 # -------------------------
-# Handlers (الأوامر والتحكم بالدروس)
+# Handlers (التحكم بالدروس والمحاضرات)
 # -------------------------
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
 async def ping_handler(client, message):
     try:
-        await message.reply_text("pong 🟢 - بوت بث الدروس والمحاضرات جاهز للعمل!")
+        await message.reply_text("pong 🟢 - بوت المقرأة للدروس والمحاضرات جاهز!")
     except Exception:
         pass
 
@@ -70,18 +70,17 @@ async def ping_handler(client, message):
 async def play_lecture_handler(client, message):
     chat_id = message.chat.id
     
-    # التأكد هل أرسل المستخدم رابطاً أم نستخدم التسجيل الافتراضي
     args = message.text.split(maxsplit=1)
     audio_source = args[1] if len(args) > 1 else DEFAULT_AUDIO
 
     logger.info("STARTING_LECTURE | chat=%s | source=%s", chat_id, audio_source)
 
     try:
-        await call_py.join_group_call(
+        await call_py.join_call(
             chat_id,
-            AudioPiped(audio_source)
+            Stream(audio_source)
         )
-        await message.reply_text("🎙️ **بدأ بث المحاضرة / الدرس بنجاح في المحادثة المباشرة!**")
+        await message.reply_text("🎙️ **تم الانضمام وبدء بث المحاضرة / الدرس في المقرأة بنجاح!**")
     except Exception as e:
         logger.exception("PLAY_LECTURE_ERROR")
         try:
@@ -93,8 +92,8 @@ async def play_lecture_handler(client, message):
 async def stop_lecture_handler(client, message):
     chat_id = message.chat.id
     try:
-        await call_py.leave_group_call(chat_id)
-        await message.reply_text("⏹️ **تم إيقاف بث الدرس والخروج من المحادثة المباشرة.**")
+        await call_py.leave_call(chat_id)
+        await message.reply_text("⏹️ **تم إيقاف بث الدرس والخروج من المكالمة.**")
     except Exception as e:
         try:
             await message.reply_text(f"❌ خطأ عند الخروج: {e}")
