@@ -5,8 +5,8 @@ import threading
 
 from flask import Flask
 from pyrogram import Client, filters
-from pytgcalls import PyTgCalls
-from pytgcalls import Stream
+from pytgcalls.py_tg_calls import PyTgCalls
+from pytgcalls.types.input_stream import AudioPiped
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +43,7 @@ API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
 
-# رابط بث الدرس أو تسجيلات المقرأة (يمكنك تغييره بأي رابط صوتي مباشر للمحاضرة)
+# رابط افتراضي لبث المحاضرات أو دروس المقراة
 DEFAULT_AUDIO = "https://server8.mp3quran.net/afs/001.mp3"
 
 app = Client(
@@ -56,13 +56,13 @@ app = Client(
 call_py = PyTgCalls(app)
 
 # -------------------------
-# Handlers (التحكم بالدروس والمحاضرات)
+# Handlers
 # -------------------------
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
 async def ping_handler(client, message):
     try:
-        await message.reply_text("pong 🟢 - بوت المقرأة للدروس والمحاضرات جاهز!")
+        await message.reply_text("pong 🟢 - بوت بث الدروس والمحاضرات جاهز!")
     except Exception:
         pass
 
@@ -76,9 +76,9 @@ async def play_lecture_handler(client, message):
     logger.info("STARTING_LECTURE | chat=%s | source=%s", chat_id, audio_source)
 
     try:
-        await call_py.join_call(
+        await call_py.join_group_call(
             chat_id,
-            Stream(audio_source)
+            AudioPiped(audio_source)
         )
         await message.reply_text("🎙️ **تم الانضمام وبدء بث المحاضرة / الدرس في المقرأة بنجاح!**")
     except Exception as e:
@@ -92,7 +92,7 @@ async def play_lecture_handler(client, message):
 async def stop_lecture_handler(client, message):
     chat_id = message.chat.id
     try:
-        await call_py.leave_call(chat_id)
+        await call_py.leave_group_call(chat_id)
         await message.reply_text("⏹️ **تم إيقاف بث الدرس والخروج من المكالمة.**")
     except Exception as e:
         try:
@@ -120,6 +120,13 @@ async def main():
 
         me = await app.get_me()
         logger.info("CONNECTED | id=%s | username=%s", me.id, me.username)
+
+        # حل مشكلة الـ Peer عبر تسخين التخزين المؤقت للمحادثات بصمت
+        try:
+            async for _ in app.get_dialogs():
+                pass
+        except Exception:
+            pass
 
         asyncio.create_task(heartbeat())
         await asyncio.Event().wait()
