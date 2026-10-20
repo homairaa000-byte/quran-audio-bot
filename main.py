@@ -205,8 +205,8 @@ async def play_handler(client, message):
             audio_source,
         )
 
-        await group_call.join(chat_id)
         group_call.input_filename = audio_source
+        await group_call.join(chat_id)
 
         await message.reply_text(
             "🎙️ **تم بدء بث المحاضرة في المكالمة المباشرة بنجاح!**"
