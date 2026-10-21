@@ -1,235 +1,379 @@
-import logging
 import os
-import subprocess
+import logging
+import asyncio
 import threading
-import inspect
+import subprocess
 
 from flask import Flask
 from werkzeug.serving import make_server
 
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram import utils as pyrogram_utils
 from pytgcalls import GroupCallFactory
 
 
-# =========================================================
-# 1. إعداد السجلات
-# =========================================================
+# =========================
+# إعداد التسجيل
+# =========================
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-logger = logging.getLogger("quran_lectures_bot")
+logger = logging.getLogger(__name__)
 
 
-# =========================================================
-# 2. إصلاح معرّفات تيليجرام
-# =========================================================
+# =========================
+# متغيرات Render
+# =========================
+
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
+SESSION_STRING = os.getenv("SESSION_STRING")
+
+PORT = int(os.getenv("PORT", "10000"))
+
+
+if not API_ID or not API_HASH or not SESSION_STRING:
+    raise RuntimeError(
+        "يجب ضبط API_ID وAPI_HASH وSESSION_STRING في Environment على Render."
+    )
+
+API_ID = int(API_ID)
+
+
+# =========================
+# توافق Pyrogram
+# =========================
+
+if hasattr(pyrogram_utils, "MIN_CHANNEL_ID"):
+    MIN_CHANNEL_ID = pyrogram_utils.MIN_CHANNEL_ID
+else:
+    MIN_CHANNEL_ID = -1000000000000
+
+if hasattr(pyrogram_utils, "MIN_CHAT_ID"):
+    MIN_CHAT_ID = pyrogram_utils.MIN_CHAT_ID
+else:
+    MIN_CHAT_ID = -999999999999
 
 _original_get_peer_type = pyrogram_utils.get_peer_type
 
 
-def fixed_get_peer_type(peer_id):
-    if (
-        isinstance(peer_id, int)
-        and peer_id < pyrogram_utils.MAX_CHANNEL_ID
-        and peer_id >= -1007852516352
-    ):
-        return "channel"
-
-    return _original_get_peer_type(peer_id)
-
-
-pyrogram_utils.MIN_CHANNEL_ID = -1007852516352
-pyrogram_utils.MIN_CHAT_ID = -999999999999
-pyrogram_utils.get_peer_type = fixed_get_peer_type
+def patched_get_peer_type(peer_id):
+    try:
+        return _original_get_peer_type(peer_id)
+    except ValueError:
+        if peer_id < MIN_CHANNEL_ID:
+            return "channel"
+        if peer_id < 0:
+            return "chat"
+        raise
 
 
-# =========================================================
-# 3. خادم الويب الخاص بـ Render
-# =========================================================
-
-web_app = Flask(__name__)
+pyrogram_utils.get_peer_type = patched_get_peer_type
 
 
-@web_app.route("/")
+# =========================
+# خادم Flask لإبقاء الخدمة حية
+# =========================
+
+flask_app = Flask(__name__)
+
+
+@flask_app.route("/")
 def home():
-    return "Quran Lectures Userbot Running", 200
+    return "Audio streaming service is running."
 
 
-@web_app.route("/health")
-def health():
-    return {"status": "ok", "service": "quran_lectures_bot"}, 200
+@flask_app.route("/ping")
+def ping():
+    return "pong"
 
 
-def run_web():
-    port = int(os.environ.get("PORT", "10000"))
-    server = make_server("0.0.0.0", port, web_app, threaded=True)
-
-    logger.info("WEB_SERVER_STARTED | port=%s", port)
-
+def run_flask():
+    server = make_server("0.0.0.0", PORT, flask_app)
     server.serve_forever()
 
 
-web_thread = threading.Thread(target=run_web, daemon=True)
-web_thread.start()
+threading.Thread(
+    target=run_flask,
+    daemon=True
+).start()
 
 
-# =========================================================
-# 4. إعداد حساب تيليجرام
-# =========================================================
-
-API_ID = int(os.environ["API_ID"])
-API_HASH = os.environ["API_HASH"]
-SESSION_STRING = os.environ["SESSION_STRING"]
+# =========================
+# إعداد Pyrogram
+# =========================
 
 app = Client(
-    "quran_lectures_userbot",
+    "audio_stream_userbot",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
-    in_memory=True,
+    in_memory=True
 )
+
+
+# =========================
+# إعداد البث الصوتي
+# =========================
 
 group_call = GroupCallFactory(app).get_group_call()
 
+os.makedirs("downloads", exist_ok=True)
 
-# تسجيل معلومات المكتبة لتشخيص البث
+current_chat_id = None
+current_input_path = None
+current_output_path = None
 
-logger.info("GROUP_CALL_TYPE: %s", type(group_call))
 
-logger.info(
-    "GROUP_CALL_METHODS: %s",
-    [
-        name
-        for name in dir(group_call)
-        if any(
-            word in name.lower()
-            for word in (
-                "join",
-                "leave",
-                "play",
-                "input",
-                "pause",
-                "stop",
-            )
+# =========================
+# أدوات مساعدة
+# =========================
+
+def convert_audio(input_path, output_path):
+    """
+    تحويل الملف إلى PCM خام:
+    48 kHz، قناتان، signed 16-bit little-endian.
+    """
+
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i", input_path,
+        "-vn",
+        "-ac", "2",
+        "-ar", "48000",
+        "-f", "s16le",
+        output_path
+    ]
+
+    logger.info("بدء تحويل الملف الصوتي: %s", input_path)
+
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=180
+    )
+
+    if result.returncode != 0:
+        logger.error(
+            "FFMPEG_ERROR: %s",
+            result.stderr[-3000:]
         )
-    ],
-)
+        raise RuntimeError("فشل تحويل الملف الصوتي.")
 
-try:
+    if not os.path.exists(output_path):
+        raise RuntimeError("لم يُنشأ الملف الصوتي المحوّل.")
+
+    if os.path.getsize(output_path) == 0:
+        raise RuntimeError("الملف الصوتي المحوّل فارغ.")
+
     logger.info(
-        "GROUP_CALL_JOIN_SIGNATURE: %s",
-        inspect.signature(group_call.join),
-    )
-except Exception:
-    logger.exception("JOIN_SIGNATURE_ERROR")
-
-
-# =========================================================
-# 5. أمر فحص البوت
-# =========================================================
-
-@app.on_message(filters.command("ping") & (filters.me | filters.incoming))
-async def ping_handler(client, message):
-    await message.reply_text(
-        "🟢 بوت مقرأة القرآن الكريم يعمل بنجاح!"
+        "اكتمل التحويل. حجم الملف: %s بايت",
+        os.path.getsize(output_path)
     )
 
 
-# =========================================================
-# 6. أمر تجهيز الملف الصوتي
-# =========================================================
+async def cleanup_files():
+    global current_input_path, current_output_path
 
-@app.on_message(filters.command("play") & (filters.me | filters.incoming))
-async def play_handler(client, message):
-    input_path = None
-    output_path = None
+    paths = [current_input_path, current_output_path]
+
+    current_input_path = None
+    current_output_path = None
+
+    for path in paths:
+        if path and os.path.isfile(path):
+            try:
+                os.remove(path)
+                logger.info("تم حذف الملف المؤقت: %s", path)
+            except OSError:
+                logger.exception("تعذر حذف الملف: %s", path)
+
+
+# =========================
+# أمر /ping
+# =========================
+
+@app.on_message(filters.command("ping"))
+async def ping_command(client, message):
+    await message.reply_text("البوت يعمل ✅")
+
+
+# =========================
+# أمر /play
+# =========================
+
+@app.on_message(filters.command("play") & filters.group)
+async def play_command(client, message):
+    global current_chat_id
+    global current_input_path
+    global current_output_path
+
+    if not message.reply_to_message:
+        await message.reply_text(
+            "ردّي على ملف صوتي أو رسالة صوتية بالأمر /play."
+        )
+        return
+
+    target_message = message.reply_to_message
+
+    media = (
+        target_message.audio
+        or target_message.voice
+        or target_message.document
+    )
+
+    if not media:
+        await message.reply_text(
+            "الرسالة التي رددتِ عليها لا تحتوي على ملف صوتي."
+        )
+        return
+
+    status_message = await message.reply_text(
+        "⏳ جارٍ تنزيل الملف وتجهيزه..."
+    )
 
     try:
-        target_message = message.reply_to_message
+        # إيقاف البث السابق إن كان في مجموعة أخرى.
+        if current_chat_id is not None:
+            try:
+                await group_call.leave()
+            except Exception:
+                logger.exception("تعذر إنهاء الاتصال السابق.")
 
-        if not target_message:
-            await message.reply_text(
-                "⚠️ الرجاء الرد على رسالة صوتية بالأمر /play."
-            )
-            return
+            await cleanup_files()
+            current_chat_id = None
 
-        audio_file = (
-            target_message.audio
-            or target_message.voice
-            or (
-                target_message.document
-                if (
-                    target_message.document
-                    and target_message.document.mime_type
-                    and target_message.document.mime_type.startswith("audio/")
-                )
-                else None
-            )
+        # تنزيل الملف.
+        downloaded_path = await client.download_media(
+            target_message,
+            file_name="downloads/"
         )
 
-        if not audio_file:
+        if not downloaded_path or not os.path.isfile(downloaded_path):
+            raise RuntimeError("تعذر تنزيل الملف من تيليجرام.")
+
+        current_input_path = downloaded_path
+
+        # إنشاء مسار الملف المحوّل.
+        base_name = os.path.splitext(
+            os.path.basename(downloaded_path)
+        )[0]
+
+        current_output_path = os.path.join(
+            "downloads",
+            base_name + "_converted.raw"
+        )
+
+        # التحويل لا يحجب حلقة الأحداث.
+        await asyncio.to_thread(
+            convert_audio,
+            current_input_path,
+            current_output_path
+        )
+
+        await status_message.edit_text(
+            "🔊 تم تجهيز الملف، جارٍ الانضمام إلى المحادثة الصوتية..."
+        )
+
+        # الانضمام إلى المحادثة الصوتية.
+        await group_call.join(message.chat.id)
+
+        current_chat_id = message.chat.id
+
+        # بدء بث الملف الصوتي.
+        # هذا هو أسلوب البث المستخدم مع واجهة pytgcalls dev24.
+        await group_call.start_audio(current_output_path)
+
+        logger.info(
+            "بدأ بث الصوت في المجموعة %s",
+            message.chat.id
+        )
+
+        await status_message.edit_text(
+            "✅ بدأ بث الملف الصوتي في المحادثة الصوتية."
+        )
+
+    except Exception as error:
+        logger.exception("حدث خطأ أثناء تشغيل الصوت.")
+
+        await status_message.edit_text(
+            "❌ تعذّر تشغيل الملف الصوتي.\n"
+            f"الخطأ: {str(error)[:700]}"
+        )
+
+
+# =========================
+# أمر /stop
+# =========================
+
+@app.on_message(filters.command("stop") & filters.group)
+async def stop_command(client, message):
+    global current_chat_id
+
+    try:
+        if current_chat_id is None:
+            await message.reply_text("لا يوجد بث صوتي نشط.")
+            return
+
+        if current_chat_id != message.chat.id:
             await message.reply_text(
-                "⚠️ يجب الرد على رسالة صوتية أو ملف صوتي بالأمر /play."
+                "البث الحالي يعمل في مجموعة أخرى."
             )
             return
+
+        try:
+            await group_call.stop_audio()
+        except Exception:
+            logger.exception("تعذر إيقاف الصوت.")
+
+        try:
+            await group_call.leave()
+        except Exception:
+            logger.exception("تعذر مغادرة المحادثة الصوتية.")
+
+        current_chat_id = None
+
+        await cleanup_files()
+
+        await message.reply_text("⏹️ تم إيقاف البث الصوتي.")
+
+    except Exception as error:
+        logger.exception("حدث خطأ في أمر الإيقاف.")
 
         await message.reply_text(
-            "📥 جارٍ تحميل الملف الصوتي..."
+            f"تعذر إيقاف البث: {str(error)[:500]}"
         )
 
-        os.makedirs("downloads", exist_ok=True)
 
-        input_path = await client.download_media(
-            target_message,
-            file_name="downloads/",
-        )
+# =========================
+# تشغيل البوت
+# =========================
 
-        if not input_path or not os.path.isfile(input_path):
-            await message.reply_text(
-                "❌ تعذر تحميل الملف الصوتي."
-            )
-            return
+async def main():
+    logger.info("جارٍ تشغيل Pyrogram...")
 
-        output_path = (
-            os.path.splitext(input_path)[0] + "_converted.raw"
-        )
+    await app.start()
 
-        # تحويل الملف إلى PCM خام بتردد 48 kHz وقناتين
+    logger.info("تم تشغيل Pyrogram بنجاح.")
 
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-nostdin",
-            "-y",
-            "-i",
-            input_path,
-            "-vn",
-            "-ac",
-            "2",
-            "-ar",
-            "48000",
-            "-f",
-            "s16le",
-            output_path,
-        ]
+    try:
+        await idle()
+    finally:
+        try:
+            await group_call.leave()
+        except Exception:
+            pass
 
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=180,
-        )
+        await app.stop()
 
-        if result.returncode != 0:
-            logger.error(
-                "FFMPEG_ERROR | %s",
-                result.stderr[-3000:],
-            )
 
-            await message.reply_text(
-                "❌ فشل تحويل الملف الصوت
+if __name__ == "__main__":
+    app.run(main())
