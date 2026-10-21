@@ -81,8 +81,6 @@ API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
 
-DEFAULT_AUDIO = "https://server8.mp3quran.net/afs/001.mp3"
-
 app = Client(
     "quran_lectures_userbot",
     api_id=API_ID,
@@ -95,7 +93,7 @@ group_call = GroupCallFactory(app).get_group_call()
 
 
 # =========================================================
-# 5. الأوامر
+# 5. الأوامر للتعامل مع الصوتيات داخل الشات
 # =========================================================
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
@@ -103,30 +101,28 @@ async def ping_handler(client, message):
     await message.reply_text("🟢 بوت مقرأة القرآن الكريم يعمل بنجاح!")
 
 
-@app.on_message(filters.command("start") & (filters.me | filters.incoming))
-async def start_handler(client, message):
-    await message.reply_text(
-        "مرحبًا بك في بوت مقرأة القرآن الكريم.\n\n"
-        "الأوامر المتاحة:\n"
-        "/ping - اختبار الاستجابة\n"
-        "/play - بدء البث المباشر\n"
-        "/stop - إيقاف البث"
-    )
-
-
 @app.on_message(filters.command("play") & (filters.me | filters.incoming))
 async def play_handler(client, message):
     try:
         chat_id = message.chat.id
-        args = message.text.split(maxsplit=1)
-        audio_source = args[1] if len(args) > 1 else DEFAULT_AUDIO
+        target_message = message.reply_to_message
 
-        logger.info("PLAY_RECEIVED | chat_id=%s | source=%s", chat_id, audio_source)
+        # التحقق مما إذا كانت الرسالة رد على ملف صوتي أو رسالة صوتية
+        if target_message and (target_message.audio or target_message.voice or target_message.document):
+            audio_file = target_message.audio or target_message.voice or target_message.document
+            
+            # تحميل الملف الصوتي مؤقتاً لتشغيله
+            await message.reply_text("📥 جاري تحميل الملف الصوتي وبثه في المكالمة...")
+            file_path = await client.download_media(audio_file)
 
-        await group_call.join(chat_id)
-        group_call.input_filename = audio_source
+            logger.info("PLAY_LOCAL_AUDIO | chat_id=%s | file=%s", chat_id, file_path)
 
-        await message.reply_text("🎙️ **تم بدء بث المحاضرة في المكالمة المباشرة بنجاح!**")
+            await group_call.join(chat_id)
+            group_call.input_filename = file_path
+
+            await message.reply_text("🎙️ **تم بدء بث الصوتية في المكالمة المباشرة بنجاح!**")
+        else:
+            await message.reply_text("⚠️ الرجاء **الرد (Reply)** على أي رسالة صوتية أو ملف صوتي داخل المجموعة بالأمر `/play` لبثه.")
 
     except Exception as exc:
         logger.exception("PLAY_ERROR")
