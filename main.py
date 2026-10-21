@@ -3,6 +3,8 @@ import os
 import threading
 
 from flask import Flask
+from werkzeug.serving import make_server
+
 from pyrogram import Client, filters
 from pyrogram import utils as pyrogram_utils
 from pytgcalls import GroupCallFactory
@@ -41,7 +43,7 @@ pyrogram_utils.MIN_CHAT_ID = -999999999999
 pyrogram_utils.get_peer_type = fixed_get_peer_type
 
 # =========================================================
-# 3. خادم الويب الخفيف لـ Render (باستخدام app.run المباشر في خيط منفصل)
+# 3. خادم الويب المستقر لـ Render (عبر WSGI server)
 # =========================================================
 
 web_app = Flask(__name__)
@@ -59,8 +61,9 @@ def health():
 
 def run_web():
     port = int(os.environ.get("PORT", "10000"))
-    # تشغيل خادم Flask بشكل هادئ ومستقر
-    web_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    server = make_server("0.0.0.0", port, web_app, threaded=True)
+    logger.info("WEB_SERVER_STARTED | port=%s", port)
+    server.serve_forever()
 
 
 web_thread = threading.Thread(target=run_web, daemon=True)
