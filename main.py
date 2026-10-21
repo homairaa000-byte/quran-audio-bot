@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import threading
@@ -149,6 +148,4 @@ async def stop_handler(client, message):
 
 
 if __name__ == "__main__":
-    app.start()
-    import asyncio
-    asyncio.get_event_loop().run_forever()
+    app.run()
