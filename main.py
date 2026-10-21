@@ -24,7 +24,7 @@ logger = logging.getLogger("quran_lectures_bot")
 
 
 # =========================================================
-# 2. إيصال إصلاح معالجة معرّفات القنوات والمجموعات في Pyrogram
+# 2. إصلاح معرّفات تيليجرام
 # =========================================================
 
 _original_get_peer_type = pyrogram_utils.get_peer_type
@@ -47,7 +47,7 @@ pyrogram_utils.get_peer_type = fixed_get_peer_type
 
 
 # =========================================================
-# 3. خادم الويب الخاص بـ Render (مع استجابة فورية لمنع إيقاف الخدمة)
+# 3. خادم الويب الفوري لـ Render
 # =========================================================
 
 web_app = Flask(__name__)
@@ -65,31 +65,17 @@ def health():
 
 def run_web():
     port = int(os.environ.get("PORT", "10000"))
-
-    try:
-        server = make_server(
-            "0.0.0.0",
-            port,
-            web_app,
-            threaded=True,
-        )
-        logger.info("WEB_SERVER_STARTED | host=0.0.0.0 | port=%s", port)
-        server.serve_forever()
-    except Exception:
-        logger.exception("WEB_SERVER_ERROR")
-        raise
+    server = make_server("0.0.0.0", port, web_app, threaded=True)
+    logger.info("WEB_SERVER_STARTED | port=%s", port)
+    server.serve_forever()
 
 
-web_thread = threading.Thread(
-    target=run_web,
-    name="render-web-server",
-    daemon=True,
-)
+web_thread = threading.Thread(target=run_web, daemon=True)
 web_thread.start()
 
 
 # =========================================================
-# 4. إعدادات تيليجرام والمكالمات
+# 4. إعدادات البوت والمكالمات
 # =========================================================
 
 API_ID = int(os.environ["API_ID"])
@@ -110,7 +96,7 @@ group_call = GroupCallFactory(app).get_group_call()
 
 
 # =========================================================
-# 5. الأوامر (ping, start, status, play, stop)
+# 5. الأوامر
 # =========================================================
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
@@ -123,24 +109,10 @@ async def start_handler(client, message):
     await message.reply_text(
         "مرحبًا بك في بوت مقرأة القرآن الكريم.\n\n"
         "الأوامر المتاحة:\n"
-        "/ping - اختبار استجابة البوت\n"
-        "/play - بدء بث المحاضرة\n"
-        "/stop - إيقاف البث\n"
-        "/status - فحص حالة الاتصال"
+        "/ping - اختبار الاستجابة\n"
+        "/play - بدء البث المباشر\n"
+        "/stop - إيقاف البث"
     )
-
-
-@app.on_message(filters.command("status") & (filters.me | filters.incoming))
-async def status_handler(client, message):
-    try:
-        me = await client.get_me()
-        username = f"@{me.username}" if me.username else "غير محدد"
-        await message.reply_text(
-            f"🟢 الحساب متصل بتيليجرام.\nمعرّف الحساب: {me.id}\nاسم المستخدم: {username}"
-        )
-    except Exception:
-        logger.exception("STATUS_ERROR")
-        await message.reply_text("❌ تعذر فحص الحالة بسبب خطأ داخلي.")
 
 
 @app.on_message(filters.command("play") & (filters.me | filters.incoming))
@@ -177,4 +149,6 @@ async def stop_handler(client, message):
 
 
 if __name__ == "__main__":
-    app.run()
+    app.start()
+    import asyncio
+    asyncio.get_event_loop().run_forever()
