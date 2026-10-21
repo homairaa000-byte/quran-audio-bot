@@ -3,12 +3,9 @@ import os
 import threading
 
 from flask import Flask
-from werkzeug.serving import make_server
-
 from pyrogram import Client, filters
 from pyrogram import utils as pyrogram_utils
 from pytgcalls import GroupCallFactory
-
 
 # =========================================================
 # 1. إعداد السجلات
@@ -20,7 +17,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("quran_lectures_bot")
-
 
 # =========================================================
 # 2. إصلاح معرّفات تيليجرام
@@ -44,9 +40,8 @@ pyrogram_utils.MIN_CHANNEL_ID = -1007852516352
 pyrogram_utils.MIN_CHAT_ID = -999999999999
 pyrogram_utils.get_peer_type = fixed_get_peer_type
 
-
 # =========================================================
-# 3. خادم الويب الفوري لـ Render
+# 3. خادم الويب الخفيف لـ Render (باستخدام app.run المباشر في خيط منفصل)
 # =========================================================
 
 web_app = Flask(__name__)
@@ -64,14 +59,12 @@ def health():
 
 def run_web():
     port = int(os.environ.get("PORT", "10000"))
-    server = make_server("0.0.0.0", port, web_app, threaded=True)
-    logger.info("WEB_SERVER_STARTED | port=%s", port)
-    server.serve_forever()
+    # تشغيل خادم Flask بشكل هادئ ومستقر
+    web_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 
 web_thread = threading.Thread(target=run_web, daemon=True)
 web_thread.start()
-
 
 # =========================================================
 # 4. إعدادات البوت والمكالمات
@@ -91,10 +84,10 @@ app = Client(
 
 group_call = GroupCallFactory(app).get_group_call()
 
+# =========================================================
+# 5. الأوامر لبث الصوتيات من داخل الشات
+# =========================================================
 
-# =========================================================
-# 5. الأوامر للتعامل مع الصوتيات داخل الشات
-# =========================================================
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
 async def ping_handler(client, message):
@@ -103,45 +96,56 @@ async def ping_handler(client, message):
 
 @app.on_message(filters.command("play") & (filters.me | filters.incoming))
 async def play_handler(client, message):
-    try:
-        chat_id = message.chat.id
-        target_message = message.reply_to_message
+  try:
+    chat_id = message.chat.id
+    target_message = message.reply_to_message
 
-        # التحقق مما إذا كانت الرسالة رد على ملف صوتي أو رسالة صوتية
-        if target_message and (target_message.audio or target_message.voice or target_message.document):
-            audio_file = target_message.audio or target_message.voice or target_message.document
-            
-            # تحميل الملف الصوتي مؤقتاً لتشغيله
-            await message.reply_text("📥 جاري تحميل الملف الصوتي وبثه في المكالمة...")
-            file_path = await client.download_media(audio_file)
+    if target_message and (
+        target_message.audio or target_message.voice or target_message.document
+    ):
+      audio_file = (
+          target_message.audio
+          or target_message.voice
+          or target_message.document
+      )
 
-            logger.info("PLAY_LOCAL_AUDIO | chat_id=%s | file=%s", chat_id, file_path)
+      await message.reply_text("📥 جاري تحميل الملف الصوتي وبثه في المكالمة...")
+      file_path = await client.download_media(audio_file)
 
-            await group_call.join(chat_id)
-            group_call.input_filename = file_path
+      logger.info(
+          "PLAY_LOCAL_AUDIO | chat_id=%s | file=%s", chat_id, file_path
+      )
 
-            await message.reply_text("🎙️ **تم بدء بث الصوتية في المكالمة المباشرة بنجاح!**")
-        else:
-            await message.reply_text("⚠️ الرجاء **الرد (Reply)** على أي رسالة صوتية أو ملف صوتي داخل المجموعة بالأمر `/play` لبثه.")
+      await group_call.join(chat_id)
+      group_call.input_filename = file_path
 
-    except Exception as exc:
-        logger.exception("PLAY_ERROR")
-        await message.reply_text(f"❌ تعذر بدء البث: {exc}")
+      await message.reply_text(
+          "🎙️ **تم بدء بث الصوتية في المكالمة المباشرة بنجاح!**"
+      )
+    else:
+      await message.reply_text(
+          "⚠️ الرجاء **الرد (Reply)** على أي رسالة صوتية أو ملف صوتي داخل"
+          " المجموعة بالأمر `/play` لبثه."
+      )
+
+  except Exception as exc:
+    logger.exception("PLAY_ERROR")
+    await message.reply_text(f"❌ تعذر بدء البث: {exc}")
 
 
 @app.on_message(filters.command("stop") & (filters.me | filters.incoming))
 async def stop_handler(client, message):
-    try:
-        chat_id = message.chat.id
-        logger.info("STOP_RECEIVED | chat_id=%s", chat_id)
+  try:
+    chat_id = message.chat.id
+    logger.info("STOP_RECEIVED | chat_id=%s", chat_id)
 
-        await group_call.leave_current_group_call()
-        await message.reply_text("⏹️ **تم إيقاف البث والخروج من المكالمة المباشرة.**")
+    await group_call.leave_current_group_call()
+    await message.reply_text("⏹️ **تم إيقاف البث والخروج من المكالمة المباشرة.**")
 
-    except Exception as exc:
-        logger.exception("STOP_ERROR")
-        await message.reply_text(f"❌ تعذر إيقاف البث: {exc}")
+  except Exception as exc:
+    logger.exception("STOP_ERROR")
+    await message.reply_text(f"❌ تعذر إيقاف البث: {exc}")
 
 
 if __name__ == "__main__":
-    app.run()
+  app.run()
