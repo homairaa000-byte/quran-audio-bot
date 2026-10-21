@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 import threading
+import inspect
 
 from flask import Flask
 from werkzeug.serving import make_server
@@ -9,6 +10,7 @@ from werkzeug.serving import make_server
 from pyrogram import Client, filters
 from pyrogram import utils as pyrogram_utils
 from pytgcalls import GroupCallFactory
+
 
 # =========================================================
 # 1. إعداد السجلات
@@ -21,8 +23,9 @@ logging.basicConfig(
 
 logger = logging.getLogger("quran_lectures_bot")
 
+
 # =========================================================
-# 2. إصلاح معرّفات تيليجرام
+# 2. إعداد معرّفات تيليجرام
 # =========================================================
 
 _original_get_peer_type = pyrogram_utils.get_peer_type
@@ -43,8 +46,9 @@ pyrogram_utils.MIN_CHANNEL_ID = -1007852516352
 pyrogram_utils.MIN_CHAT_ID = -999999999999
 pyrogram_utils.get_peer_type = fixed_get_peer_type
 
+
 # =========================================================
-# 3. خادم الويب الأساسي لإبقاء المنفذ مفتوحاً في Render
+# 3. خادم الويب لـ Render
 # =========================================================
 
 web_app = Flask(__name__)
@@ -70,8 +74,9 @@ def run_web():
 web_thread = threading.Thread(target=run_web, daemon=True)
 web_thread.start()
 
+
 # =========================================================
-# 4. إعدادات البوت والمكالمات
+# 4. إعداد حساب تيليجرام
 # =========================================================
 
 API_ID = int(os.environ["API_ID"])
@@ -88,85 +93,106 @@ app = Client(
 
 group_call = GroupCallFactory(app).get_group_call()
 
-# =========================================================
-# 5. الأوامر وبث الصوت عبر التحويل بـ FFmpeg
-# =========================================================
 
+# تسجيل معلومات واجهة مكتبة البث
+
+logger.info("GROUP_CALL_TYPE: %s", type(group_call))
+
+logger.info(
+    "GROUP_CALL_METHODS: %s",
+    [
+        name for name in dir(group_call)
+        if any(word in name.lower() for word in (
+            "join", "leave", "play", "input", "pause", "stop"
+        ))
+    ],
+)
+
+try:
+    logger.info(
+        "GROUP_CALL_JOIN_SIGNATURE: %s",
+        inspect.signature(group_call.join),
+    )
+except Exception:
+    logger.exception("JOIN_SIGNATURE_ERROR")
+
+
+# =========================================================
+# 5. أمر الفحص
+# =========================================================
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
 async def ping_handler(client, message):
-  await message.reply_text("🟢 بوت مقرأة القرآن الكريم يعمل بنجاح!")
+    await message.reply_text(
+        "🟢 بوت مقرأة القرآن الكريم يعمل!"
+    )
 
+
+# =========================================================
+# 6. أمر البث
+# =========================================================
 
 @app.on_message(filters.command("play") & (filters.me | filters.incoming))
 async def play_handler(client, message):
-  try:
-    chat_id = message.chat.id
-    target_message = message.reply_to_message
+    input_path = None
+    output_path = None
 
-    if target_message and (
-        target_message.audio or target_message.voice or target_message.document
-    ):
-      audio_file = (
-          target_message.audio
-          or target_message.voice
-          or target_message.document
-      )
+    try:
+        target_message = message.reply_to_message
 
-      await message.reply_text(
-          "📥 جاري تحميل وتحويل الملف الصوتي للبث المباشر..."
-      )
-      input_path = await client.download_media(audio_file)
+        if not target_message:
+            await message.reply_text(
+                "⚠️ ردي على الرسالة الصوتية بالأمر /play."
+            )
+            return
 
-      output_path = os.path.splitext(input_path)[0] + "_converted.raw"
+        audio_file = (
+            target_message.audio
+            or target_message.voice
+            or (
+                target_message.document
+                if target_message.document
+                and target_message.document.mime_type
+                and target_message.document.mime_type.startswith("audio/")
+                else None
+            )
+        )
 
-      cmd = [
-          "ffmpeg",
-          "-y",
-          "-i",
-          input_path,
-          "-f",
-          "s16le",
-          "-ac",
-          "2",
-          "-ar",
-          "48000",
-          output_path,
-      ]
-      subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if not audio_file:
+            await message.reply_text(
+                "⚠️ يجب الرد على رسالة صوتية أو ملف صوتي بالأمر /play."
+            )
+            return
 
-      logger.info(
-          "PLAY_CONVERTED_AUDIO | chat_id=%s | file=%s", chat_id, output_path
-      )
+        await message.reply_text("📥 جارٍ تحميل الملف الصوتي...")
 
-      await group_call.join(chat_id)
-      group_call.input_filename = output_path
+        input_path = await client.download_media(
+            target_message,
+            file_name="downloads/"
+        )
 
-      await message.reply_text("🎙️ **تم بدء بث التلاوة في المكالمة بنجاح!**")
-    else:
-      await message.reply_text(
-          "⚠️ الرجاء **الرد (Reply)** على أي رسالة صوتية أو ملف صوتي داخل"
-          " المجموعة بالأمر `/play` لبثه."
-      )
+        if not input_path or not os.path.isfile(input_path):
+            await message.reply_text("❌ تعذر تحميل الملف الصوتي.")
+            return
 
-  except Exception as exc:
-    logger.exception("PLAY_ERROR")
-    await message.reply_text(f"❌ تعذر بدء البث: {exc}")
+        output_path = os.path.splitext(input_path)[0] + "_converted.raw"
 
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-nostdin",
+            "-y",
+            "-i", input_path,
+            "-vn",
+            "-ac", "2",
+            "-ar", "48000",
+            "-f", "s16le",
+            output_path,
+        ]
 
-@app.on_message(filters.command("stop") & (filters.me | filters.incoming))
-async def stop_handler(client, message):
-  try:
-    chat_id = message.chat.id
-    logger.info("STOP_RECEIVED | chat_id=%s", chat_id)
-
-    await group_call.leave_current_group_call()
-    await message.reply_text("⏹️ **تم إيقاف البث والخروج من المكالمة المباشرة.**")
-
-  except Exception as exc:
-    logger.exception("STOP_ERROR")
-    await message.reply_text(f"❌ تعذر إيقاف البث: {exc}")
-
-
-if __name__ == "__main__":
-  app.run()
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=
