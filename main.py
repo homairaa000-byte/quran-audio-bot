@@ -1,5 +1,6 @@
 import logging
 import os
+import subprocess
 import threading
 
 from flask import Flask
@@ -43,7 +44,7 @@ pyrogram_utils.MIN_CHAT_ID = -999999999999
 pyrogram_utils.get_peer_type = fixed_get_peer_type
 
 # =========================================================
-# 3. خادم الويب المستقر لـ Render (عبر WSGI server)
+# 3. خادم الويب المستقر لـ Render
 # =========================================================
 
 web_app = Flask(__name__)
@@ -88,13 +89,13 @@ app = Client(
 group_call = GroupCallFactory(app).get_group_call()
 
 # =========================================================
-# 5. الأوامر لبث الصوتيات من داخل الشات
+# 5. الأوامر لبث الصوت مع التحويل التلقائي عبر FFmpeg
 # =========================================================
 
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
 async def ping_handler(client, message):
-    await message.reply_text("🟢 بوت مقرأة القرآن الكريم يعمل بنجاح!")
+  await message.reply_text("🟢 بوت مقرأة القرآن الكريم يعمل بنجاح!")
 
 
 @app.on_message(filters.command("play") & (filters.me | filters.incoming))
@@ -112,19 +113,38 @@ async def play_handler(client, message):
           or target_message.document
       )
 
-      await message.reply_text("📥 جاري تحميل الملف الصوتي وبثه في المكالمة...")
-      file_path = await client.download_media(audio_file)
+      await message.reply_text(
+          "📥 جاري تحميل وتحويل الملف الصوتي للبث المباشر..."
+      )
+      input_path = await client.download_media(audio_file)
+
+      # مسار ملف التحويل الخام المتوافق تماماً مع المكالمة
+      output_path = os.path.splitext(input_path)[0] + "_converted.raw"
+
+      # استخدام FFmpeg لتحويل الصوت إلى الصيغة الخام (PCM 48kHz stereo)
+      cmd = [
+          "ffmpeg",
+          "-y",
+          "-i",
+          input_path,
+          "-f",
+          "s16le",
+          "-ac",
+          "2",
+          "-ar",
+          "48000",
+          output_path,
+      ]
+      subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
       logger.info(
-          "PLAY_LOCAL_AUDIO | chat_id=%s | file=%s", chat_id, file_path
+          "PLAY_CONVERTED_AUDIO | chat_id=%s | file=%s", chat_id, output_path
       )
 
       await group_call.join(chat_id)
-      group_call.input_filename = file_path
+      group_call.input_filename = output_path
 
-      await message.reply_text(
-          "🎙️ **تم بدء بث الصوتية في المكالمة المباشرة بنجاح!**"
-      )
+      await message.reply_text("🎙️ **تم بدء بث التلاوة في المكالمة بنجاح!**")
     else:
       await message.reply_text(
           "⚠️ الرجاء **الرد (Reply)** على أي رسالة صوتية أو ملف صوتي داخل"
