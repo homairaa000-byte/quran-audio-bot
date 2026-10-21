@@ -47,7 +47,7 @@ pyrogram_utils.get_peer_type = fixed_get_peer_type
 
 
 # =========================================================
-# 3. خادم الويب الخاص بـ Render
+# 3. خادم الويب الخاص بـ Render (مع استجابة فورية لمنع إيقاف الخدمة)
 # =========================================================
 
 web_app = Flask(__name__)
@@ -60,10 +60,7 @@ def home():
 
 @web_app.route("/health")
 def health():
-    return {
-        "status": "ok",
-        "service": "quran_lectures_bot",
-    }, 200
+    return {"status": "ok", "service": "quran_lectures_bot"}, 200
 
 
 def run_web():
@@ -76,10 +73,8 @@ def run_web():
             web_app,
             threaded=True,
         )
-
         logger.info("WEB_SERVER_STARTED | host=0.0.0.0 | port=%s", port)
         server.serve_forever()
-
     except Exception:
         logger.exception("WEB_SERVER_ERROR")
         raise
@@ -90,7 +85,6 @@ web_thread = threading.Thread(
     name="render-web-server",
     daemon=True,
 )
-
 web_thread.start()
 
 
