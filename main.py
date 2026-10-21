@@ -1,6 +1,10 @@
 import logging
 import os
 import subprocess
+import threading
+
+from flask import Flask
+from werkzeug.serving import make_server
 
 from pyrogram import Client, filters
 from pyrogram import utils as pyrogram_utils
@@ -40,7 +44,34 @@ pyrogram_utils.MIN_CHAT_ID = -999999999999
 pyrogram_utils.get_peer_type = fixed_get_peer_type
 
 # =========================================================
-# 3. إعدادات البوت والمكالمات
+# 3. خادم الويب الأساسي لإبقاء المنفذ مفتوحاً في Render
+# =========================================================
+
+web_app = Flask(__name__)
+
+
+@web_app.route("/")
+def home():
+    return "Quran Lectures Userbot Running", 200
+
+
+@web_app.route("/health")
+def health():
+    return {"status": "ok", "service": "quran_lectures_bot"}, 200
+
+
+def run_web():
+    port = int(os.environ.get("PORT", "10000"))
+    server = make_server("0.0.0.0", port, web_app, threaded=True)
+    logger.info("WEB_SERVER_STARTED | port=%s", port)
+    server.serve_forever()
+
+
+web_thread = threading.Thread(target=run_web, daemon=True)
+web_thread.start()
+
+# =========================================================
+# 4. إعدادات البوت والمكالمات
 # =========================================================
 
 API_ID = int(os.environ["API_ID"])
@@ -58,7 +89,7 @@ app = Client(
 group_call = GroupCallFactory(app).get_group_call()
 
 # =========================================================
-# 4. الأوامر وبث الصوت عبر التحويل بـ FFmpeg
+# 5. الأوامر وبث الصوت عبر التحويل بـ FFmpeg
 # =========================================================
 
 
