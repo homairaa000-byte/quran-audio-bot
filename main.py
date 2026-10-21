@@ -25,7 +25,7 @@ logger = logging.getLogger("quran_lectures_bot")
 
 
 # =========================================================
-# 2. إعداد معرّفات تيليجرام
+# 2. إصلاح معرّفات تيليجرام
 # =========================================================
 
 _original_get_peer_type = pyrogram_utils.get_peer_type
@@ -48,7 +48,7 @@ pyrogram_utils.get_peer_type = fixed_get_peer_type
 
 
 # =========================================================
-# 3. خادم الويب لـ Render
+# 3. خادم الويب الخاص بـ Render
 # =========================================================
 
 web_app = Flask(__name__)
@@ -67,7 +67,9 @@ def health():
 def run_web():
     port = int(os.environ.get("PORT", "10000"))
     server = make_server("0.0.0.0", port, web_app, threaded=True)
+
     logger.info("WEB_SERVER_STARTED | port=%s", port)
+
     server.serve_forever()
 
 
@@ -94,17 +96,26 @@ app = Client(
 group_call = GroupCallFactory(app).get_group_call()
 
 
-# تسجيل معلومات واجهة مكتبة البث
+# تسجيل معلومات المكتبة لتشخيص البث
 
 logger.info("GROUP_CALL_TYPE: %s", type(group_call))
 
 logger.info(
     "GROUP_CALL_METHODS: %s",
     [
-        name for name in dir(group_call)
-        if any(word in name.lower() for word in (
-            "join", "leave", "play", "input", "pause", "stop"
-        ))
+        name
+        for name in dir(group_call)
+        if any(
+            word in name.lower()
+            for word in (
+                "join",
+                "leave",
+                "play",
+                "input",
+                "pause",
+                "stop",
+            )
+        )
     ],
 )
 
@@ -118,18 +129,18 @@ except Exception:
 
 
 # =========================================================
-# 5. أمر الفحص
+# 5. أمر فحص البوت
 # =========================================================
 
 @app.on_message(filters.command("ping") & (filters.me | filters.incoming))
 async def ping_handler(client, message):
     await message.reply_text(
-        "🟢 بوت مقرأة القرآن الكريم يعمل!"
+        "🟢 بوت مقرأة القرآن الكريم يعمل بنجاح!"
     )
 
 
 # =========================================================
-# 6. أمر البث
+# 6. أمر تجهيز الملف الصوتي
 # =========================================================
 
 @app.on_message(filters.command("play") & (filters.me | filters.incoming))
@@ -142,7 +153,7 @@ async def play_handler(client, message):
 
         if not target_message:
             await message.reply_text(
-                "⚠️ ردي على الرسالة الصوتية بالأمر /play."
+                "⚠️ الرجاء الرد على رسالة صوتية بالأمر /play."
             )
             return
 
@@ -151,9 +162,11 @@ async def play_handler(client, message):
             or target_message.voice
             or (
                 target_message.document
-                if target_message.document
-                and target_message.document.mime_type
-                and target_message.document.mime_type.startswith("audio/")
+                if (
+                    target_message.document
+                    and target_message.document.mime_type
+                    and target_message.document.mime_type.startswith("audio/")
+                )
                 else None
             )
         )
@@ -164,29 +177,43 @@ async def play_handler(client, message):
             )
             return
 
-        await message.reply_text("📥 جارٍ تحميل الملف الصوتي...")
+        await message.reply_text(
+            "📥 جارٍ تحميل الملف الصوتي..."
+        )
+
+        os.makedirs("downloads", exist_ok=True)
 
         input_path = await client.download_media(
             target_message,
-            file_name="downloads/"
+            file_name="downloads/",
         )
 
         if not input_path or not os.path.isfile(input_path):
-            await message.reply_text("❌ تعذر تحميل الملف الصوتي.")
+            await message.reply_text(
+                "❌ تعذر تحميل الملف الصوتي."
+            )
             return
 
-        output_path = os.path.splitext(input_path)[0] + "_converted.raw"
+        output_path = (
+            os.path.splitext(input_path)[0] + "_converted.raw"
+        )
+
+        # تحويل الملف إلى PCM خام بتردد 48 kHz وقناتين
 
         cmd = [
             "ffmpeg",
             "-hide_banner",
             "-nostdin",
             "-y",
-            "-i", input_path,
+            "-i",
+            input_path,
             "-vn",
-            "-ac", "2",
-            "-ar", "48000",
-            "-f", "s16le",
+            "-ac",
+            "2",
+            "-ar",
+            "48000",
+            "-f",
+            "s16le",
             output_path,
         ]
 
@@ -195,4 +222,14 @@ async def play_handler(client, message):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=
+            timeout=180,
+        )
+
+        if result.returncode != 0:
+            logger.error(
+                "FFMPEG_ERROR | %s",
+                result.stderr[-3000:],
+            )
+
+            await message.reply_text(
+                "❌ فشل تحويل الملف الصوت
