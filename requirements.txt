@@ -1,4 +1,15 @@
-pyrogram==2.0.106
-tgcrypto
 Flask==3.0.0
+Werkzeug==3.1.9
+Jinja2==3.1.6
+MarkupSafe==3.0.4
+itsdangerous==2.2.0
+click==8.5.0
+blinker==1.9.0
+Pyrogram==2.0.106
+Tgcrypto==1.2.5
 pytgcalls==3.0.0.dev24
+av==18.1.0
+numpy==2.4.6
+pyaes==1.6.1
+pysocks==1.7.1
+opencv-python-headless==4.14.0.94
