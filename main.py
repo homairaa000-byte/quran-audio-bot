@@ -261,6 +261,20 @@ async def log_incoming_group_messages(client, message):
 
 
 # =========================================================
+# Command observer: records slash commands before specific handlers run.
+# =========================================================
+@app.on_message(filters.group & filters.text & filters.regex(r"^/"), group=-5)
+async def log_group_commands(client, message):
+    logger.info(
+        "تم رصد أمر في المجموعة: text=%r chat_id=%s outgoing=%s reply_id=%s",
+        (message.text or "")[:100],
+        getattr(message.chat, "id", None),
+        getattr(message, "outgoing", None),
+        getattr(message.reply_to_message, "id", None) if message.reply_to_message else None,
+    )
+
+
+# =========================================================
 # Commands
 # =========================================================
 @app.on_message(filters.command("ping") & filters.group)
@@ -303,6 +317,27 @@ async def play_command(client, message):
     downloaded_path = None
     fifo_path = None
 
+    reply = message.reply_to_message
+    logger.info(
+        "تم استدعاء /play: chat_id=%s outgoing=%s message_id=%s reply_id=%s "
+        "reply_audio=%s reply_voice=%s reply_document=%s",
+        getattr(message.chat, "id", None),
+        getattr(message, "outgoing", None),
+        getattr(message, "id", None),
+        getattr(reply, "id", None) if reply else None,
+        bool(reply and reply.audio),
+        bool(reply and reply.voice),
+        bool(reply and reply.document),
+    )
+
+    if play_lock is None or connection_event is None:
+        logger.error("لم تتم تهيئة قفل التشغيل أو حدث اتصال الصوت.")
+        try:
+            await message.reply_text("❌ البوت لم يكتمل تهيئته. راجعي سجلات Render.")
+        except Exception:
+            logger.exception("تعذر إرسال رسالة عدم التهيئة.")
+        return
+
     async with play_lock:
         try:
             if shutting_down:
@@ -314,8 +349,17 @@ async def play_command(client, message):
 
             target = message.reply_to_message
             if target is None:
+                logger.warning("/play وصل دون الرد على رسالة أخرى.")
                 await message.reply_text("⚠️ ردّي على رسالة صوتية أو ملف صوتي ثم أرسلي /play.")
                 return
+
+            logger.info(
+                "فحص الملف المشار إليه: audio=%s voice=%s document=%s mime_type=%s",
+                bool(target.audio),
+                bool(target.voice),
+                bool(target.document),
+                getattr(target.document, "mime_type", None) if target.document else None,
+            )
 
             is_audio = bool(
                 target.audio or target.voice or
