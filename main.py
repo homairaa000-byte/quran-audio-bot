@@ -2,7 +2,6 @@ import os
 import asyncio
 import logging
 import threading
-import subprocess
 import shutil
 import uuid
 import time
@@ -59,8 +58,6 @@ app = Client(
 
 current_chat_id = None
 current_input_path = None
-current_fifo_path = None
-current_ffmpeg_process = None
 connected_chat_id = None
 shutting_down = False
 play_lock = None
@@ -118,9 +115,6 @@ async def network_status_changed(context, is_connected):
     from datetime import datetime, timezone
 
     last_network_event_at = datetime.now(timezone.utc).isoformat()
-
-    # In this PyTgCalls file-call API, context may not expose full_chat.
-    # Use the currently requested chat as the best available association.
     chat_id = current_chat_id
     network_event_chat_id = chat_id
 
@@ -143,7 +137,7 @@ async def network_status_changed(context, is_connected):
 
 
 # =========================================================
-# Temporary-file and FFmpeg helpers
+# Temporary-file helpers
 # =========================================================
 def delete_path(path):
     if not path:
@@ -156,50 +150,16 @@ def delete_path(path):
         logger.exception("تعذر حذف المسار المؤقت: %s", path)
 
 
-def create_fifo(path):
-    if os.path.lexists(path):
-        os.remove(path)
-    os.mkfifo(path, 0o600)
-    logger.info("تم إنشاء FIFO: %s", path)
-
-
-async def terminate_ffmpeg():
-    global current_ffmpeg_process
-    process = current_ffmpeg_process
-    if process is None:
-        return
-    current_ffmpeg_process = None
-    try:
-        if process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                process.kill()
-                await asyncio.wait_for(process.wait(), timeout=5)
-        else:
-            await process.wait()
-    except ProcessLookupError:
-        pass
-    except Exception:
-        logger.exception("حدث خطأ أثناء إنهاء FFmpeg.")
-
-
 async def cleanup_files():
-    global current_input_path, current_fifo_path
+    global current_input_path
     input_path = current_input_path
-    fifo_path = current_fifo_path
     current_input_path = None
-    current_fifo_path = None
-
-    await terminate_ffmpeg()
 
     try:
         group_call.input_filename = ""
     except Exception:
         logger.exception("تعذر إعادة ضبط مصدر الصوت.")
 
-    await asyncio.to_thread(delete_path, fifo_path)
     await asyncio.to_thread(delete_path, input_path)
 
 
@@ -225,44 +185,12 @@ async def stop_current_broadcast():
     return stop_succeeded
 
 
-async def start_ffmpeg_stream(input_path, fifo_path):
-    global current_ffmpeg_process
-    command = [
-        FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-        "-i", input_path, "-vn", "-ac", "2", "-ar", "48000",
-        "-acodec", "pcm_s16le", "-f", "s16le", fifo_path,
-    ]
-    logger.info("بدء تحويل الملف الصوتي إلى PCM عبر FIFO.")
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    current_ffmpeg_process = process
-    logger.info("بدأت FFmpeg. pid=%s", process.pid)
-    return process
-
-
-async def monitor_ffmpeg(process):
-    try:
-        code = await process.wait()
-        if code == 0:
-            logger.info("انتهت FFmpeg من قراءة الملف الصوتي.")
-        else:
-            logger.error("انتهت FFmpeg بخطأ. return_code=%s", code)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("حدث خطأ أثناء مراقبة FFmpeg.")
-
-
 async def start_group_call_with_floodwait(chat_id, max_attempts=2):
     """Retry join only after Telegram's required FloodWait interval."""
     global last_flood_wait_until
     for attempt in range(1, max_attempts + 1):
         try:
             logger.info("محاولة الانضمام للمحادثة الصوتية %s (attempt=%s).", chat_id, attempt)
-            # Do not put a shorter asyncio timeout around a Telegram FloodWait.
             await group_call.start(chat_id)
             return
         except FloodWait as error:
@@ -276,7 +204,6 @@ async def start_group_call_with_floodwait(chat_id, max_attempts=2):
                 raise
             if attempt >= max_attempts:
                 raise
-            # Wait the full server-requested duration plus a small safety margin.
             await asyncio.sleep(wait_seconds + 2)
 
 
@@ -346,10 +273,9 @@ async def status_command(client, message):
 
 @app.on_message(filters.command("play") & filters.group)
 async def play_command(client, message):
-    global current_chat_id, current_input_path, current_fifo_path, connected_chat_id
+    global current_chat_id, current_input_path, connected_chat_id
     status = None
     downloaded_path = None
-    fifo_path = None
 
     reply = message.reply_to_message
     logger.info(
@@ -387,14 +313,6 @@ async def play_command(client, message):
                 await message.reply_text("⚠️ ردّي على رسالة صوتية أو ملف صوتي ثم أرسلي /play.")
                 return
 
-            logger.info(
-                "فحص الملف المشار إليه: audio=%s voice=%s document=%s mime_type=%s",
-                bool(target.audio),
-                bool(target.voice),
-                bool(target.document),
-                getattr(target.document, "mime_type", None) if target.document else None,
-            )
-
             is_audio = bool(
                 target.audio or target.voice or
                 (target.document and (target.document.mime_type or "").startswith("audio/"))
@@ -418,26 +336,19 @@ async def play_command(client, message):
             if not downloaded_path or not os.path.isfile(downloaded_path):
                 raise RuntimeError("تعذر تنزيل الملف الصوتي.")
 
-            logger.info("اكتمل تنزيل الصوت. الحجم=%s بايت", os.path.getsize(downloaded_path))
-            fifo_path = os.path.join(DOWNLOAD_DIR, f"audio_{uuid.uuid4().hex}.fifo")
-            await asyncio.to_thread(create_fifo, fifo_path)
+            logger.info("اكتمل تنزيل الصوت. الحجم=%s بايت، المسار=%s", os.path.getsize(downloaded_path), downloaded_path)
 
             current_input_path = downloaded_path
-            current_fifo_path = fifo_path
             downloaded_path = None
-            fifo_path = None
             current_chat_id = message.chat.id
             connected_chat_id = None
             connection_event.clear()
 
-            await status.edit_text("🔊 تم تجهيز الملف.\n⏳ جارٍ الاتصال بالمحادثة الصوتية...")
+            await status.edit_text("🔊 تم تنزيل الملف.\n⏳ جارٍ الاتصال بالمحادثة الصوتية...")
 
-            # Start group call first; do not make FFmpeg block opening a FIFO
-            # before the voice call is actually joined.
+            # البدء بالانضمام للمحادثة الصوتية أولاً
             await start_group_call_with_floodwait(current_chat_id, max_attempts=2)
 
-            # The network callback may be delayed or have an API-specific context.
-            # Give it up to 45 seconds after start returns, but log whether it fired.
             try:
                 await asyncio.wait_for(connection_event.wait(), timeout=45)
             except asyncio.TimeoutError:
@@ -446,21 +357,23 @@ async def play_command(client, message):
                     "connected_chat_id=%s network_event_chat_id=%s",
                     connected_chat_id, network_event_chat_id,
                 )
-                # Do not silently claim that audio is confirmed.
                 await status.edit_text(
                     "⚠️ طلب الانضمام نُفّذ، لكن لم يصل تأكيد شبكة الصوت بعد.\n"
                     "راجعي سجلات Render قبل إعادة المحاولة."
                 )
                 return
 
-            # Only start the FIFO producer after the group call has connected.
-            process = await start_ffmpeg_stream(current_input_path, current_fifo_path)
-            asyncio.create_task(monitor_ffmpeg(process))
-            group_call.input_filename = current_fifo_path
+            # تمرير ملف الصوت الأصلي مباشرة إلى PyTgCalls وتوليد تفاصيل الأخطاء عند التشغيل
+            try:
+                group_call.input_filename = current_input_path
+                logger.info("تم تعيين ملف الصوت المباشر بنجاح إلى PyTgCalls: %s", current_input_path)
+            except Exception as e:
+                logger.exception("حدث خطأ أثناء تعيين ملف الصوت لـ PyTgCalls: %s", e)
+                raise RuntimeError(f"تعذر تشغيل الملف الصوتي مباشرة: {str(e)}")
 
-            logger.info("تم تأكيد اتصال شبكة البث وبدء مصدر الصوت.")
+            logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل الملف الصوتي مباشرة.")
             await status.edit_text(
-                "✅ اتصل البث بالمحادثة الصوتية وبدأ إرسال الصوت."
+                "✅ اتصل البث بالمحادثة الصوتية وبدأ تشغيل الملف."
             )
 
         except FloodWait as error:
@@ -484,18 +397,16 @@ async def play_command(client, message):
                     logger.exception("تعذر تحديث رسالة الحالة.")
             await stop_current_broadcast()
         except Exception as error:
-            logger.exception("حدث خطأ أثناء تنفيذ /play.")
+            logger.exception("حدث خطأ تفصيلي أثناء تنفيذ /play: %s", error)
             await stop_current_broadcast()
             if status:
                 try:
-                    await status.edit_text(f"❌ تعذر بدء البث.\nالخطأ: {str(error)[:250]}")
+                    await status.edit_text(f"❌ تعذر بدء البث.\nالخطأ التفصيلي: {str(error)[:250]}")
                 except Exception:
                     logger.exception("تعذر تحديث رسالة الخطأ.")
         finally:
             if downloaded_path:
                 await asyncio.to_thread(delete_path, downloaded_path)
-            if fifo_path:
-                await asyncio.to_thread(delete_path, fifo_path)
 
 
 @app.on_message(filters.command("stop") & filters.group)
