@@ -6,6 +6,7 @@ import subprocess
 import shutil
 import uuid
 import time
+import urllib.request
 
 from flask import Flask
 from werkzeug.serving import make_server
@@ -31,6 +32,7 @@ logging.getLogger("pytgcalls").setLevel(logging.INFO)
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 PORT = int(os.getenv("PORT", "10000"))
 
 if not API_ID or not API_HASH or not SESSION_STRING:
@@ -45,7 +47,7 @@ DOWNLOAD_DIR = "/tmp/quran_audio_bot"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # =========================================================
-# Web server
+# Web server & Self-Ping
 # =========================================================
 web = Flask(__name__)
 
@@ -100,6 +102,25 @@ def run_web():
         server.serve_forever()
     except Exception:
         logger.exception("تعذر تشغيل خادم الويب.")
+
+
+def self_ping_worker():
+    """إرسال طلب دوري كل 4 دقائق لمنع خمول الخدمة على Render"""
+    target_url = RENDER_EXTERNAL_URL or f"http://127.0.0.1:{PORT}/ping"
+    if not target_url.startswith("http"):
+        target_url = f"https://{target_url}/ping"
+    elif not target_url.endswith("/ping"):
+        target_url = target_url.rstrip("/") + "/ping"
+
+    logger.info("تم بدء خيط الإنقاذ الذاتي (Self-Ping) على الرابط: %s", target_url)
+    while not shutting_down:
+        time.sleep(240)  # كل 4 دقائق
+        try:
+            req = urllib.request.Request(target_url, headers={"User-Agent": "SelfPingBot"})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                logger.debug("إشعار الإنعاش الذاتي ناجح: status=%s", response.status)
+        except Exception:
+            logger.debug("فشل مؤقت في إشعار الإنعاش الذاتي (سيتم إعادة المحاولة لاحقاً).")
 
 
 # =========================================================
@@ -348,7 +369,7 @@ async def play_command(client, message):
                 await message.reply_text("⚠️ الرسالة التي رددتِ عليها لا تحتوي على ملف صوتي.")
                 return
 
-            status = await message.reply_text("⏳ جارٍ تنزيل ومعالجة الملف الصوتي...")
+            status = await message.reply_text("⏳ جارٍ تنزيل ومعالجة الملف الصوتي الطويل...")
 
             if current_chat_id is not None:
                 stopped = await stop_current_broadcast()
@@ -367,7 +388,7 @@ async def play_command(client, message):
 
             converted_path = os.path.join(DOWNLOAD_DIR, f"audio_{uuid.uuid4().hex}.pcm")
             
-            await status.edit_text("⚙️ جارٍ تحويل الصوت للتوافق مع البث...")
+            await status.edit_text("⚙️ جارٍ تحويل الصوت للتوافق مع البث الطويل...")
             await convert_audio_for_call(downloaded_path, converted_path)
 
             current_input_path = downloaded_path
@@ -399,7 +420,7 @@ async def play_command(client, message):
             group_call.input_filename = current_converted_path
             logger.info("تم تعيين الملف المحول بنجاح لـ PyTgCalls: %s", current_converted_path)
 
-            logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل الصوت بنجاح.")
+            logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل التلاوة الطويلة بنجاح.")
             await status.edit_text(
                 "✅ اتصل البث بالمحادثة الصوتية وبدأ بث التلاوة بنجاح."
             )
@@ -530,4 +551,5 @@ async def telegram_watchdog():
 
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True, name="web-server").start()
+    threading.Thread(target=self_ping_worker, daemon=True, name="self-ping").start()
     app.run(main())
