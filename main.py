@@ -159,8 +159,8 @@ async def network_status_changed(context, is_connected):
         )
 
 
-@group_call.on_stream_end
-async def stream_end_handler(client, update):
+@group_call.on_playout_ended
+async def stream_end_handler(context, folder, filename):
     """إرسال دعاء كفارة المجلس وتنظيف الملفات عند انتهاء التلاوة"""
     logger.info("انتهى الملف الصوتي الحالي. جارٍ إرسال دعاء كفارة المجلس وتنظيف الملفات.")
     global current_chat_id
