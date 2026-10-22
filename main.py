@@ -70,6 +70,7 @@ last_message_at = None
 last_network_event_at = None
 last_flood_wait_until = 0.0
 network_event_chat_id = None
+auto_stop_task = None  # مؤقت الإيقاف التلقائي بناءً على مدة الصوت
 
 
 @web.route("/")
@@ -162,7 +163,7 @@ async def network_status_changed(context, is_connected):
 @group_call.on_playout_ended
 async def stream_end_handler(context, folder, filename):
     """التعامل مع انتهاء الملف الصوتي وإرسال دعاء كفارة المجلس"""
-    logger.info("انتهى الملف الصوتي الحالي. جارٍ إيقاف البث وإرسال دعاء كفارة المجلس.")
+    logger.info("انتهى الملف الصوتي الحالي عبر الحدث. جارٍ إيقاف البث وإرسال دعاء كفارة المجلس.")
     await stop_current_broadcast(send_kaffarat=True)
 
 
@@ -197,7 +198,13 @@ async def cleanup_files():
 
 
 async def stop_current_broadcast(send_kaffarat=False):
-    global current_chat_id, connected_chat_id
+    global current_chat_id, connected_chat_id, auto_stop_task
+    
+    # إلغاء مؤقت الإيقاف التلقائي إن كان يعمل
+    if auto_stop_task and not auto_stop_task.done():
+        auto_stop_task.cancel()
+        auto_stop_task = None
+
     logger.info("بدء إيقاف البث وتنظيف الملفات.")
     stop_succeeded = False
     try:
@@ -230,6 +237,42 @@ async def stop_current_broadcast(send_kaffarat=False):
 
     logger.info("اكتملت محاولة تنظيف البث. stop_succeeded=%s", stop_succeeded)
     return stop_succeeded
+
+
+async def get_audio_duration(file_path):
+    """استخراج مدة الملف الصوتي بالثواني باستخدام ffprobe أو ffmpeg"""
+    command = [
+        FFMPEG.replace("ffmpeg", "ffprobe"), "-v", "error",
+        "-show_entries", "format=duration", "-of",
+        "default=noprint_wrappers=1:nokey=1", file_path
+    ]
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, _ = await process.communicate()
+        if process.returncode == 0:
+            duration = float(stdout.decode().strip())
+            return duration
+    except Exception:
+        logger.exception("تعذر استخراج مدة الصوت عبر ffprobe، سيتم استخدام الطريقة الاحتياطية.")
+    return 0.0
+
+
+async def schedule_auto_stop(duration, chat_id):
+    """مؤقت خلفي ينتظر حتى تنتهي مدة السورة ثم يوقف البث ويرسل الدعاء تلقائياً"""
+    try:
+        logger.info("تم جدولة إيقاف البث التلقائي بعد %.1f ثانية.", duration)
+        await asyncio.sleep(duration + 2) # إضافة ثانيتين هامش أمان
+        if current_chat_id == chat_id:
+            logger.info("انتهت مدة الملف الصوتي تماماً. جارٍ الإيقاف التلقائي وإرسال الكفارة...")
+            await stop_current_broadcast(send_kaffarat=True)
+    except asyncio.CancelledError:
+        logger.info("تم إلغاء مؤقت الإيقاف التلقائي (بسبب تشغيل صوت جديد أو أمر إيقاف).")
+    except Exception:
+        logger.exception("خطأ في مؤقت الإيقاف التلقائي.")
 
 
 async def convert_audio_for_call(input_path, output_path):
@@ -341,7 +384,7 @@ async def status_command(client, message):
 
 @app.on_message(filters.command("play") & filters.group)
 async def play_command(client, message):
-    global current_chat_id, current_input_path, current_converted_path, connected_chat_id
+    global current_chat_id, current_input_path, current_converted_path, connected_chat_id, auto_stop_task
     status = None
     downloaded_path = None
     converted_path = None
@@ -407,6 +450,10 @@ async def play_command(client, message):
 
             logger.info("اكتمل تنزيل الصوت. الحجم=%s بايت", os.path.getsize(downloaded_path))
 
+            # استخراج مدة الصوت بالثواني قبل التحويل
+            audio_duration = await get_audio_duration(downloaded_path)
+            logger.info("مدة الملف الصوتي المستخرجة: %.1f ثانية", audio_duration)
+
             converted_path = os.path.join(DOWNLOAD_DIR, f"audio_{uuid.uuid4().hex}.pcm")
             
             await status.edit_text("⚙️ جارٍ تحويل الصوت للتوافق مع البث...")
@@ -440,6 +487,10 @@ async def play_command(client, message):
 
             group_call.input_filename = current_converted_path
             logger.info("تم تعيين الملف المحول بنجاح لـ PyTgCalls: %s", current_converted_path)
+
+            # تشغيل مؤقت الإيقاف التلقائي بناءً على مدة الملف الصوتي
+            if audio_duration > 0:
+                auto_stop_task = asyncio.create_task(schedule_auto_stop(audio_duration, current_chat_id))
 
             logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل الصوت بنجاح.")
             await status.edit_text(
