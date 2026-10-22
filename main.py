@@ -159,6 +159,26 @@ async def network_status_changed(context, is_connected):
         )
 
 
+@group_call.on_stream_end
+async def stream_end_handler(client, update):
+    """إرسال دعاء كفارة المجلس وتنظيف الملفات عند انتهاء التلاوة"""
+    logger.info("انتهى الملف الصوتي الحالي. جارٍ إرسال دعاء كفارة المجلس وتنظيف الملفات.")
+    global current_chat_id
+    chat_id = current_chat_id
+    
+    await stop_current_broadcast()
+    
+    if chat_id:
+        try:
+            await app.send_message(
+                chat_id,
+                "«سُبْحَانَكَ اللَّهُمَّ وَبِحَمْدِكَ، أَشْهَدُ أَنْ لَا إِلَهَ إِلَّا أَنْتَ أَسْتَغْفِرُكَ وَأَتُوبُ إِلَيْكَ» 🌸"
+            )
+            logger.info("تم إرسال دعاء كفارة المجلس بنجاح عند انتهاء البث.")
+        except Exception:
+            logger.exception("تعذر إرسال رسالة انتهاء البث للمجموعة.")
+
+
 # =========================================================
 # Temporary-file and FFmpeg helpers
 # =========================================================
@@ -369,7 +389,7 @@ async def play_command(client, message):
                 await message.reply_text("⚠️ الرسالة التي رددتِ عليها لا تحتوي على ملف صوتي.")
                 return
 
-            status = await message.reply_text("⏳ جارٍ تنزيل ومعالجة الملف الصوتي الطويل...")
+            status = await message.reply_text("⏳ جارٍ تنزيل ومعالجة الملف الصوتي...")
 
             if current_chat_id is not None:
                 stopped = await stop_current_broadcast()
@@ -388,7 +408,7 @@ async def play_command(client, message):
 
             converted_path = os.path.join(DOWNLOAD_DIR, f"audio_{uuid.uuid4().hex}.pcm")
             
-            await status.edit_text("⚙️ جارٍ تحويل الصوت للتوافق مع البث الطويل...")
+            await status.edit_text("⚙️ جارٍ تحويل الصوت للتوافق مع البث...")
             await convert_audio_for_call(downloaded_path, converted_path)
 
             current_input_path = downloaded_path
@@ -420,7 +440,7 @@ async def play_command(client, message):
             group_call.input_filename = current_converted_path
             logger.info("تم تعيين الملف المحول بنجاح لـ PyTgCalls: %s", current_converted_path)
 
-            logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل التلاوة الطويلة بنجاح.")
+            logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل الصوت بنجاح.")
             await status.edit_text(
                 "✅ اتصل البث بالمحادثة الصوتية وبدأ بث التلاوة بنجاح."
             )
