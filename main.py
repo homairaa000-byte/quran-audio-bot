@@ -4,11 +4,13 @@ import logging
 import threading
 import subprocess
 import time
+import shutil
 
 from flask import Flask
 from werkzeug.serving import make_server
 
 from pyrogram import Client, filters, idle
+from pyrogram.utils import MAX_CHANNEL_ID
 from pytgcalls import GroupCallFactory
 
 
@@ -18,7 +20,8 @@ from pytgcalls import GroupCallFactory
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    force=True
 )
 
 logger = logging.getLogger("quran_audio_bot")
@@ -36,10 +39,15 @@ PORT = int(os.getenv("PORT", "10000"))
 
 if not API_ID or not API_HASH or not SESSION_STRING:
     raise RuntimeError(
-        "تأكدي من إضافة API_ID وAPI_HASH وSESSION_STRING في Render."
+        "تأكدي من وجود API_ID وAPI_HASH وSESSION_STRING في Render."
     )
 
 API_ID = int(API_ID)
+
+if shutil.which("ffmpeg") is None:
+    raise RuntimeError(
+        "لم يُعثر على ffmpeg. يجب توفيره في بيئة Render."
+    )
 
 
 # =====================================
@@ -55,18 +63,31 @@ def home():
 
 
 @web.route("/ping")
-def ping():
+def web_ping():
     return "pong"
 
 
+@web.route("/health")
+def health():
+    return {
+        "status": "running",
+        "telegram_client": "configured"
+    }
+
+
 def run_web():
-    server = make_server("0.0.0.0", PORT, web)
-    server.serve_forever()
+    try:
+        server = make_server("0.0.0.0", PORT, web)
+        logger.info("خادم الويب يعمل على المنفذ %s", PORT)
+        server.serve_forever()
+    except Exception:
+        logger.exception("تعذر تشغيل خادم الويب")
 
 
 threading.Thread(
     target=run_web,
-    daemon=True
+    daemon=True,
+    name="web-server"
 ).start()
 
 
@@ -96,45 +117,55 @@ os.makedirs("downloads", exist_ok=True)
 current_chat_id = None
 current_input_path = None
 current_converted_path = None
+connected_chat_id = None
 
 play_lock = asyncio.Lock()
 connection_event = asyncio.Event()
-connected_chat_id = None
 
 
 # =====================================
-# متابعة حالة الاتصال
+# متابعة حالة اتصال المحادثة الصوتية
 # =====================================
 
 @group_call.on_network_status_changed
 async def network_status_changed(context, is_connected):
     global connected_chat_id
 
+    chat_id = None
+
     try:
-        chat_id = int(context.chat_id)
+        # في هذا الإصدار يُستخدم full_chat.id.
+        full_chat = getattr(context, "full_chat", None)
+
+        if full_chat is not None:
+            full_chat_id = getattr(full_chat, "id", None)
+
+            if full_chat_id is not None:
+                chat_id = MAX_CHANNEL_ID - int(full_chat_id)
+
     except (AttributeError, TypeError, ValueError):
-        chat_id = None
+        logger.exception("تعذر تحديد المجموعة من سياق اتصال الصوت")
 
     if is_connected:
         connected_chat_id = chat_id
         connection_event.set()
 
         logger.info(
-            "تم تأكيد اتصال البث. chat_id=%s",
+            "وصل حدث اتصال شبكة البث. المجموعة=%s",
             chat_id
         )
     else:
-        connection_event.clear()
         connected_chat_id = None
+        connection_event.clear()
 
         logger.warning(
-            "انقطع اتصال البث بالمحادثة الصوتية. chat_id=%s",
+            "انقطع اتصال شبكة البث. المجموعة=%s",
             chat_id
         )
 
 
 # =====================================
-# تحويل الملف الصوتي
+# تحويل الصوت إلى PCM
 # =====================================
 
 def convert_audio(input_path, output_path):
@@ -151,6 +182,8 @@ def convert_audio(input_path, output_path):
         output_path
     ]
 
+    logger.info("بدء تحويل الصوت: %s", input_path)
+
     result = subprocess.run(
         command,
         stdout=subprocess.PIPE,
@@ -161,8 +194,8 @@ def convert_audio(input_path, output_path):
 
     if result.returncode != 0:
         logger.error(
-            "خطأ FFmpeg: %s",
-            result.stderr[-2500:]
+            "فشل FFmpeg: %s",
+            result.stderr[-3000:]
         )
         raise RuntimeError("فشل تحويل الملف الصوتي.")
 
@@ -173,7 +206,7 @@ def convert_audio(input_path, output_path):
         raise RuntimeError("الملف الصوتي المحوّل فارغ.")
 
     logger.info(
-        "اكتمل تحويل الملف الصوتي بنجاح. الحجم=%s بايت",
+        "اكتمل التحويل. الحجم=%s بايت",
         os.path.getsize(output_path)
     )
 
@@ -183,15 +216,15 @@ def convert_audio(input_path, output_path):
 # =====================================
 
 def delete_file(path):
-    if path and os.path.isfile(path):
-        try:
+    if not path:
+        return
+
+    try:
+        if os.path.isfile(path):
             os.remove(path)
             logger.info("حُذف الملف المؤقت: %s", path)
-        except OSError:
-            logger.exception(
-                "تعذر حذف الملف: %s",
-                path
-            )
+    except OSError:
+        logger.exception("تعذر حذف الملف: %s", path)
 
 
 async def cleanup():
@@ -204,10 +237,9 @@ async def cleanup():
     current_input_path = None
     current_converted_path = None
 
-    if input_path:
-        await asyncio.to_thread(delete_file, input_path)
+    await asyncio.to_thread(delete_file, input_path)
 
-    if converted_path:
+    if converted_path != input_path:
         await asyncio.to_thread(delete_file, converted_path)
 
 
@@ -219,10 +251,12 @@ async def stop_current_broadcast():
     global current_chat_id
     global connected_chat_id
 
+    logger.info("جارٍ إيقاف البث وتنظيف الملفات")
+
     try:
         await group_call.stop()
     except Exception:
-        logger.exception("حدث خطأ أثناء إيقاف الاتصال.")
+        logger.exception("تعذر إيقاف اتصال pytgcalls")
 
     current_chat_id = None
     connected_chat_id = None
@@ -231,14 +265,27 @@ async def stop_current_broadcast():
 
     await cleanup()
 
+    logger.info("اكتملت محاولة إيقاف البث")
+
 
 # =====================================
-# أمر ping
+# تسجيل الأوامر الواردة
 # =====================================
 
 @app.on_message(filters.command("ping"))
 async def ping_command(client, message):
-    await message.reply_text("البوت يعمل ✅")
+    logger.info(
+        "وصل أمر ping. chat_id=%s user_id=%s outgoing=%s",
+        getattr(message.chat, "id", None),
+        getattr(message.from_user, "id", None),
+        message.outgoing
+    )
+
+    try:
+        await message.reply_text("البوت يعمل ✅")
+        logger.info("تم الرد على أمر ping")
+    except Exception:
+        logger.exception("فشل الرد على أمر ping")
 
 
 # =====================================
@@ -250,12 +297,16 @@ async def play_command(client, message):
     global current_chat_id
     global current_input_path
     global current_converted_path
+    global connected_chat_id
+
+    logger.info(
+        "وصل أمر play. chat_id=%s outgoing=%s",
+        getattr(message.chat, "id", None),
+        message.outgoing
+    )
 
     async with play_lock:
-        status = await message.reply_text(
-            "⏳ جارٍ تجهيز الملف الصوتي..."
-        )
-
+        status = None
         downloaded_path = None
         converted_path = None
         broadcast_started = False
@@ -263,34 +314,39 @@ async def play_command(client, message):
         try:
             target = message.reply_to_message
 
-            if not target:
-                await status.edit_text(
+            if target is None:
+                await message.reply_text(
                     "⚠️ ردّي على رسالة تحتوي على ملف صوتي، "
                     "ثم أرسلي /play."
                 )
                 return
 
-            if not (
+            is_audio = bool(
                 target.audio
                 or target.voice
                 or (
                     target.document
-                    and (
-                        target.document.mime_type or ""
-                    ).startswith("audio/")
+                    and (target.document.mime_type or "").startswith(
+                        "audio/"
+                    )
                 )
-            ):
-                await status.edit_text(
-                    "⚠️ الرسالة التي رددتِ عليها لا تحتوي "
-                    "على ملف صوتي مدعوم."
+            )
+
+            if not is_audio:
+                await message.reply_text(
+                    "⚠️ الرسالة التي رددتِ عليها لا تحتوي على ملف صوتي."
                 )
                 return
 
-            # إيقاف أي بث سابق وتنظيف ملفاته.
+            status = await message.reply_text(
+                "⏳ جارٍ تجهيز الملف الصوتي..."
+            )
+
             if current_chat_id is not None:
                 await stop_current_broadcast()
 
-            # تنزيل الملف.
+            logger.info("جارٍ تنزيل الملف الصوتي")
+
             downloaded_path = await client.download_media(
                 target,
                 file_name="downloads/"
@@ -300,28 +356,23 @@ async def play_command(client, message):
                 not downloaded_path
                 or not os.path.isfile(downloaded_path)
             ):
-                raise RuntimeError(
-                    "تعذر تنزيل الملف الصوتي من تيليجرام."
-                )
+                raise RuntimeError("تعذر تنزيل الملف الصوتي.")
 
             filename = os.path.splitext(
                 os.path.basename(downloaded_path)
             )[0]
 
-            # اسم فريد حتى لا تتداخل الملفات.
             converted_path = os.path.join(
                 "downloads",
                 f"{filename}_{int(time.time())}.raw"
             )
 
-            # تحويل الملف إلى PCM.
             await asyncio.to_thread(
                 convert_audio,
                 downloaded_path,
                 converted_path
             )
 
-            # الاحتفاظ بالملفين إلى حين إيقاف البث.
             current_input_path = downloaded_path
             current_converted_path = converted_path
 
@@ -336,69 +387,74 @@ async def play_command(client, message):
                 "⏳ جارٍ الاتصال بالمحادثة الصوتية..."
             )
 
-            # تعيين مصدر الصوت قبل طلب الاتصال.
+            logger.info(
+                "جارٍ طلب الاتصال بالمحادثة %s",
+                message.chat.id
+            )
+
             group_call.input_filename = current_converted_path
 
-            # بدء الاتصال بالمحادثة الصوتية.
             await group_call.start(message.chat.id)
 
-            # لا نعتبر البث ناجحًا إلا عند ورود إشارة اتصال.
-            try:
-                await asyncio.wait_for(
-                    connection_event.wait(),
-                    timeout=25
-                )
-            except asyncio.TimeoutError:
-                raise RuntimeError(
-                    "لم تصل إشارة تأكيد الاتصال بالمحادثة الصوتية "
-                    "خلال 25 ثانية. راجعي سجل Render."
-                )
+            logger.info(
+                "انتهى استدعاء group_call.start؛ ننتظر حدث الاتصال"
+            )
+
+            await asyncio.wait_for(
+                connection_event.wait(),
+                timeout=30
+            )
 
             current_chat_id = message.chat.id
             broadcast_started = True
 
             await status.edit_text(
-                "✅ تم الاتصال بالمحادثة الصوتية.\n"
-                "🔊 أُرسل طلب تشغيل الملف الصوتي."
+                "✅ وصل حدث اتصال البث بالمحادثة الصوتية.\n"
+                "إذا لم يُسمع الصوت، أرسلي السجلات الجديدة "
+                "للتأكد من تشغيل الملف داخل الاتصال."
             )
 
             logger.info(
-                "تم تأكيد الاتصال بالمحادثة %s",
+                "وصل حدث الاتصال للمجموعة %s",
                 current_chat_id
             )
 
-        except Exception as error:
-            logger.exception(
-                "فشل بدء البث الصوتي."
+        except asyncio.TimeoutError:
+            logger.error(
+                "انتهت مهلة انتظار الاتصال بالمحادثة الصوتية"
             )
 
-            if not broadcast_started:
-                await stop_current_broadcast()
+            if status:
+                try:
+                    await status.edit_text(
+                        "❌ لم يصل تأكيد الاتصال بالمحادثة الصوتية خلال 30 ثانية.\n"
+                        "راجعي Render Logs وأرسلي الأسطر التي ظهرت بعد /play."
+                    )
+                except Exception:
+                    logger.exception("تعذر تحديث رسالة الخطأ")
 
-            try:
-                await status.edit_text(
-                    "❌ تعذّر بدء البث الصوتي.\n\n"
-                    f"التفاصيل: {str(error)[:600]}"
-                )
-            except Exception:
-                logger.exception(
-                    "تعذر تحديث رسالة حالة البث."
-                )
+            await stop_current_broadcast()
+
+        except Exception as error:
+            logger.exception("حدث خطأ داخل أمر play")
+
+            await stop_current_broadcast()
+
+            if status:
+                try:
+                    await status.edit_text(
+                        "❌ تعذر بدء البث.\n"
+                        f"الخطأ: {str(error)[:500]}"
+                    )
+                except Exception:
+                    logger.exception("تعذر إرسال تفاصيل الخطأ")
 
         finally:
-            # لا تحذفي الملفين إذا كان البث مستمرًا.
-            # إذا لم يبدأ البث، احذفي الملفات المحلية المؤقتة.
             if downloaded_path:
-                await asyncio.to_thread(
-                    delete_file,
-                    downloaded_path
-                )
+                await asyncio.to_thread(delete_file, downloaded_path)
 
             if converted_path:
-                await asyncio.to_thread(
-                    delete_file,
-                    converted_path
-                )
+                await asyncio.to_thread(delete_file, converted_path)
 
 
 # =====================================
@@ -407,16 +463,24 @@ async def play_command(client, message):
 
 @app.on_message(filters.command("stop") & filters.group)
 async def stop_command(client, message):
+    global current_chat_id
+
+    logger.info(
+        "وصل أمر stop. chat_id=%s outgoing=%s",
+        getattr(message.chat, "id", None),
+        message.outgoing
+    )
+
     async with play_lock:
         if current_chat_id is None:
             await message.reply_text(
-                "ℹ️ لا يوجد بث نشط حاليًا."
+                "ℹ️ لا يوجد بث نشط مسجل حاليًا."
             )
             return
 
         if current_chat_id != message.chat.id:
             await message.reply_text(
-                "⚠️ البث النشط موجود في مجموعة أخرى."
+                "⚠️ البث المسجل موجود في مجموعة أخرى."
             )
             return
 
@@ -424,43 +488,61 @@ async def stop_command(client, message):
             await stop_current_broadcast()
 
             await message.reply_text(
-                "⏹️ تم إيقاف البث الصوتي وتنظيف الملفات المؤقتة."
+                "⏹️ تمت محاولة إيقاف البث وتنظيف الملفات."
             )
 
-        except Exception as error:
-            logger.exception(
-                "حدث خطأ أثناء إيقاف البث."
-            )
+        except Exception:
+            logger.exception("فشل تنفيذ أمر stop")
 
             await message.reply_text(
-                "❌ تعذر إيقاف البث.\n"
-                f"{str(error)[:400]}"
+                "❌ حدث خطأ أثناء إيقاف البث. راجعي السجلات."
             )
 
 
 # =====================================
-# التشغيل
+# التقاط الأخطاء غير المتوقعة
+# =====================================
+
+@app.on_message()
+async def log_other_messages(client, message):
+    # لا نسجل نصوص الرسائل الخاصة أو محتواها؛ نسجل فقط وصولها.
+    if message.text and message.text.startswith("/"):
+        logger.info(
+            "وصلت رسالة أمر غير معالجة: chat_id=%s outgoing=%s",
+            getattr(message.chat, "id", None),
+            message.outgoing
+        )
+
+
+# =====================================
+# التشغيل والإغلاق
 # =====================================
 
 async def main():
-    logger.info("جارٍ تشغيل البوت...")
-
-    await app.start()
-
-    logger.info("تم الاتصال بتيليجرام بنجاح.")
+    logger.info("بدء تشغيل البوت...")
 
     try:
+        await app.start()
+
+        logger.info("تم الاتصال بتيليجرام بنجاح.")
+        logger.info("البوت جاهز لاستقبال الأوامر.")
+
         await idle()
+
+    except Exception:
+        logger.exception("حدث خطأ في التشغيل الرئيسي")
+        raise
 
     finally:
         try:
             await stop_current_broadcast()
         except Exception:
-            logger.exception(
-                "حدث خطأ أثناء تنظيف البث عند الإغلاق."
-            )
+            logger.exception("حدث خطأ أثناء تنظيف البث عند الإغلاق")
 
-        await app.stop()
+        try:
+            await app.stop()
+        except Exception:
+            logger.exception("حدث خطأ أثناء إيقاف Pyrogram")
 
 
 if __name__ == "__main__":
