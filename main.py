@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import threading
+import subprocess
 import shutil
 import uuid
 import time
@@ -58,6 +59,7 @@ app = Client(
 
 current_chat_id = None
 current_input_path = None
+current_converted_path = None
 connected_chat_id = None
 shutting_down = False
 play_lock = None
@@ -137,7 +139,7 @@ async def network_status_changed(context, is_connected):
 
 
 # =========================================================
-# Temporary-file helpers
+# Temporary-file and FFmpeg helpers
 # =========================================================
 def delete_path(path):
     if not path:
@@ -151,15 +153,18 @@ def delete_path(path):
 
 
 async def cleanup_files():
-    global current_input_path
+    global current_input_path, current_converted_path
     input_path = current_input_path
+    converted_path = current_converted_path
     current_input_path = None
+    current_converted_path = None
 
     try:
         group_call.input_filename = ""
     except Exception:
         logger.exception("تعذر إعادة ضبط مصدر الصوت.")
 
+    await asyncio.to_thread(delete_path, converted_path)
     await asyncio.to_thread(delete_path, input_path)
 
 
@@ -183,6 +188,27 @@ async def stop_current_broadcast():
         connection_event.clear()
     logger.info("اكتملت محاولة تنظيف البث. stop_succeeded=%s", stop_succeeded)
     return stop_succeeded
+
+
+async def convert_audio_for_call(input_path, output_path):
+    """تحويل الملف الصوتي عبر FFmpeg إلى صيغة PCM ملائمة لـ PyTgCalls"""
+    command = [
+        FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", input_path, "-vn", "-ac", "2", "-ar", "48000",
+        "-acodec", "pcm_s16le", "-f", "s16le", output_path,
+    ]
+    logger.info("بدء تحويل الملف الصوتي عبر FFmpeg...")
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        err_msg = stderr.decode('utf-8', errors='ignore')
+        logger.error("فشل تحويل FFmpeg. كود الخطأ: %s | التفاصيل: %s", process.returncode, err_msg)
+        raise RuntimeError(f"فشل معالجة الملف الصوتي عبر FFmpeg: {err_msg[:150]}")
+    logger.info("اكتمل تحويل الملف الصوتي بنجاح إلى PCM.")
 
 
 async def start_group_call_with_floodwait(chat_id, max_attempts=2):
@@ -273,9 +299,10 @@ async def status_command(client, message):
 
 @app.on_message(filters.command("play") & filters.group)
 async def play_command(client, message):
-    global current_chat_id, current_input_path, connected_chat_id
+    global current_chat_id, current_input_path, current_converted_path, connected_chat_id
     status = None
     downloaded_path = None
+    converted_path = None
 
     reply = message.reply_to_message
     logger.info(
@@ -321,7 +348,7 @@ async def play_command(client, message):
                 await message.reply_text("⚠️ الرسالة التي رددتِ عليها لا تحتوي على ملف صوتي.")
                 return
 
-            status = await message.reply_text("⏳ جارٍ تجهيز الملف الصوتي...")
+            status = await message.reply_text("⏳ جارٍ تنزيل ومعالجة الملف الصوتي...")
 
             if current_chat_id is not None:
                 stopped = await stop_current_broadcast()
@@ -336,17 +363,25 @@ async def play_command(client, message):
             if not downloaded_path or not os.path.isfile(downloaded_path):
                 raise RuntimeError("تعذر تنزيل الملف الصوتي.")
 
-            logger.info("اكتمل تنزيل الصوت. الحجم=%s بايت، المسار=%s", os.path.getsize(downloaded_path), downloaded_path)
+            logger.info("اكتمل تنزيل الصوت. الحجم=%s بايت", os.path.getsize(downloaded_path))
+
+            # تحضير مسار الملف المحول عبر PCM
+            converted_path = os.path.join(DOWNLOAD_DIR, f"audio_{uuid.uuid4().hex}.pcm")
+            
+            await status.edit_text("⚙️ جارٍ تحويل الصوت للتوافق مع المكالمة...")
+            await convert_audio_for_call(downloaded_path, converted_path)
 
             current_input_path = downloaded_path
+            current_converted_path = converted_path
             downloaded_path = None
+            converted_path = None
             current_chat_id = message.chat.id
             connected_chat_id = None
             connection_event.clear()
 
-            await status.edit_text("🔊 تم تنزيل الملف.\n⏳ جارٍ الاتصال بالمحادثة الصوتية...")
+            await status.edit_text("🔊 تمت المعالجة.\n⏳ جارٍ الاتصال بالمحادثة الصوتية...")
 
-            # البدء بالانضمام للمحادثة الصوتية أولاً
+            # الانضمام للمحادثة الصوتية
             await start_group_call_with_floodwait(current_chat_id, max_attempts=2)
 
             try:
@@ -359,21 +394,17 @@ async def play_command(client, message):
                 )
                 await status.edit_text(
                     "⚠️ طلب الانضمام نُفّذ، لكن لم يصل تأكيد شبكة الصوت بعد.\n"
-                    "راجعي سجلات Render قبل إعادة المحاولة."
+                    "تأكدي من فتح المحادثة الصوتية في المجموعة."
                 )
                 return
 
-            # تمرير ملف الصوت الأصلي مباشرة إلى PyTgCalls وتوليد تفاصيل الأخطاء عند التشغيل
-            try:
-                group_call.input_filename = current_input_path
-                logger.info("تم تعيين ملف الصوت المباشر بنجاح إلى PyTgCalls: %s", current_input_path)
-            except Exception as e:
-                logger.exception("حدث خطأ أثناء تعيين ملف الصوت لـ PyTgCalls: %s", e)
-                raise RuntimeError(f"تعذر تشغيل الملف الصوتي مباشرة: {str(e)}")
+            # تعيين الملف المحول إلى PyTgCalls
+            group_call.input_filename = current_converted_path
+            logger.info("تم تعيين الملف المحول بنجاح لـ PyTgCalls: %s", current_converted_path)
 
-            logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل الملف الصوتي مباشرة.")
+            logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل الصوت بنجاح.")
             await status.edit_text(
-                "✅ اتصل البث بالمحادثة الصوتية وبدأ تشغيل الملف."
+                "✅ اتصل البث بالمحادثة الصوتية وبدأ تشغيل التلاوة بنجاح."
             )
 
         except FloodWait as error:
@@ -382,8 +413,7 @@ async def play_command(client, message):
             if status:
                 try:
                     await status.edit_text(
-                        f"⏳ تيليجرام طلب الانتظار {wait_seconds} ثانية قبل محاولة الانضمام.\n"
-                        "لم أكرر المحاولة تلقائيًا لتجنب زيادة التقييد."
+                        f"⏳ تيليجرام طلب الانتظار {wait_seconds} ثانية قبل محاولة الانضمام."
                     )
                 except Exception:
                     logger.exception("تعذر تحديث رسالة FloodWait.")
@@ -407,6 +437,8 @@ async def play_command(client, message):
         finally:
             if downloaded_path:
                 await asyncio.to_thread(delete_path, downloaded_path)
+            if converted_path:
+                await asyncio.to_thread(delete_path, converted_path)
 
 
 @app.on_message(filters.command("stop") & filters.group)
