@@ -137,12 +137,6 @@ async def network_status_changed(context, is_connected):
         )
 
 
-@group_call.on_stream_end
-async def stream_end_handler(client, update):
-    logger.info("انتهى تشغيل الملف الصوتي بالكامل (Stream ended naturally).")
-    await stop_current_broadcast()
-
-
 # =========================================================
 # Temporary-file and FFmpeg helpers
 # =========================================================
@@ -196,13 +190,13 @@ async def stop_current_broadcast():
 
 
 async def convert_audio_for_call(input_path, output_path):
-    """تحويل الملف الصوتي عبر FFmpeg إلى صيغة PCM ملائمة لـ PyTgCalls للملفات الطويلة"""
+    """تحويل الملف الصوتي عبر FFmpeg إلى صيغة PCM ملائمة لـ PyTgCalls"""
     command = [
         FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
         "-i", input_path, "-vn", "-ac", "2", "-ar", "48000",
         "-acodec", "pcm_s16le", "-f", "s16le", output_path,
     ]
-    logger.info("بدء تحويل الملف الصوتي الطويل عبر FFmpeg...")
+    logger.info("بدء تحويل الملف الصوتي عبر FFmpeg...")
     process = await asyncio.create_subprocess_exec(
         *command,
         stdout=subprocess.PIPE,
@@ -353,7 +347,7 @@ async def play_command(client, message):
                 await message.reply_text("⚠️ الرسالة التي رددتِ عليها لا تحتوي على ملف صوتي.")
                 return
 
-            status = await message.reply_text("⏳ جارٍ تنزيل ومعالجة الملف الصوتي الطويل...")
+            status = await message.reply_text("⏳ جارٍ تنزيل ومعالجة الملف الصوتي...")
 
             if current_chat_id is not None:
                 stopped = await stop_current_broadcast()
@@ -372,7 +366,7 @@ async def play_command(client, message):
 
             converted_path = os.path.join(DOWNLOAD_DIR, f"audio_{uuid.uuid4().hex}.pcm")
             
-            await status.edit_text("⚙️ جارٍ تحويل الصوت للتوافق مع البث الطويل...")
+            await status.edit_text("⚙️ جارٍ تحويل الصوت للتوافق مع البث...")
             await convert_audio_for_call(downloaded_path, converted_path)
 
             current_input_path = downloaded_path
@@ -404,9 +398,9 @@ async def play_command(client, message):
             group_call.input_filename = current_converted_path
             logger.info("تم تعيين الملف المحول بنجاح لـ PyTgCalls: %s", current_converted_path)
 
-            logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل الملف الطويل بنجاح.")
+            logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل الصوت بنجاح.")
             await status.edit_text(
-                "✅ اتصل البث بالمحادثة الصوتية وبدأ بث التلاوة الطويلة بنجاح."
+                "✅ اتصل البث بالمحادثة الصوتية وبدأ بث التلاوة بنجاح."
             )
 
         except FloodWait as error:
