@@ -170,13 +170,14 @@ async def stream_end_handler(context, folder, filename):
     
     if chat_id:
         try:
+            logger.info("محاولة إرسال دعاء كفارة المجلس إلى المجموعة: %s", chat_id)
             await app.send_message(
                 chat_id,
                 "«سُبْحَانَكَ اللَّهُمَّ وَبِحَمْدِكَ، أَشْهَدُ أَنْ لَا إِلَهَ إِلَّا أَنْتَ أَسْتَغْفِرُكَ وَأَتُوبُ إِلَيْكَ» 🌸"
             )
             logger.info("تم إرسال دعاء كفارة المجلس بنجاح عند انتهاء البث.")
-        except Exception:
-            logger.exception("تعذر إرسال رسالة انتهاء البث للمجموعة.")
+        except Exception as e:
+            logger.exception("تعذر إرسال رسالة انتهاء البث للمجموعة بسبب الخطأ: %s", e)
 
 
 # =========================================================
