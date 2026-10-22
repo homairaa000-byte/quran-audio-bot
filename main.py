@@ -5,9 +5,12 @@ import threading
 import subprocess
 import shutil
 import uuid
+import time
+
 from flask import Flask
 from werkzeug.serving import make_server
 from pyrogram import Client, filters, idle
+from pyrogram.errors import FloodWait
 from pytgcalls import GroupCallFactory
 
 # =========================================================
@@ -46,7 +49,6 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # =========================================================
 web = Flask(__name__)
 
-# These state variables are defined before the web routes use them.
 app = Client(
     "quran_audio_bot",
     api_id=API_ID,
@@ -64,6 +66,9 @@ shutting_down = False
 play_lock = None
 connection_event = None
 last_message_at = None
+last_network_event_at = None
+last_flood_wait_until = 0.0
+network_event_chat_id = None
 
 
 @web.route("/")
@@ -84,6 +89,8 @@ def health():
         "broadcast": "active" if current_chat_id is not None else "inactive",
         "voice_network": "connected" if connected_chat_id is not None else "not_confirmed",
         "last_message_seen": last_message_at,
+        "last_network_event_at": last_network_event_at,
+        "last_flood_wait_until": last_flood_wait_until or None,
     }
 
 
@@ -107,25 +114,32 @@ group_call = GroupCallFactory(
 
 @group_call.on_network_status_changed
 async def network_status_changed(context, is_connected):
-    global connected_chat_id
-    chat_id = None
-    try:
-        full_chat = getattr(context, "full_chat", None)
-        if full_chat is not None:
-            chat_id = getattr(full_chat, "id", None)
-    except Exception:
-        logger.exception("تعذر تحديد المجموعة من حدث اتصال الصوت.")
+    global connected_chat_id, last_network_event_at, network_event_chat_id
+    from datetime import datetime, timezone
+
+    last_network_event_at = datetime.now(timezone.utc).isoformat()
+
+    # In this PyTgCalls file-call API, context may not expose full_chat.
+    # Use the currently requested chat as the best available association.
+    chat_id = current_chat_id
+    network_event_chat_id = chat_id
 
     if is_connected:
         connected_chat_id = chat_id
         if connection_event is not None:
             connection_event.set()
-        logger.info("اتصلت شبكة البث بالمحادثة الصوتية. chat_id=%s", chat_id)
+        logger.info(
+            "حدث اتصال شبكة الصوت: connected=True chat_id=%s context_type=%s",
+            chat_id, type(context).__name__,
+        )
     else:
         connected_chat_id = None
         if connection_event is not None:
             connection_event.clear()
-        logger.warning("انقطع اتصال شبكة البث. chat_id=%s", chat_id)
+        logger.warning(
+            "حدث اتصال شبكة الصوت: connected=False chat_id=%s context_type=%s",
+            chat_id, type(context).__name__,
+        )
 
 
 # =========================================================
@@ -146,7 +160,7 @@ def create_fifo(path):
     if os.path.lexists(path):
         os.remove(path)
     os.mkfifo(path, 0o600)
-    logger.info("تم إنشاء FIFO.")
+    logger.info("تم إنشاء FIFO: %s", path)
 
 
 async def terminate_ffmpeg():
@@ -196,11 +210,11 @@ async def stop_current_broadcast():
     try:
         await asyncio.wait_for(group_call.stop(), timeout=15)
         stop_succeeded = True
-        logger.info("تم إيقاف اتصال pytgcalls.")
+        logger.info("تم تنفيذ group_call.stop().")
     except asyncio.TimeoutError:
         logger.error("انتهت مهلة إيقاف pytgcalls بعد 15 ثانية.")
     except Exception:
-        logger.exception("تعذر إيقاف اتصال pytgcalls.")
+        logger.exception("تعذر إيقاف pytgcalls.")
 
     await cleanup_files()
     current_chat_id = None
@@ -219,7 +233,6 @@ async def start_ffmpeg_stream(input_path, fifo_path):
         "-acodec", "pcm_s16le", "-f", "s16le", fifo_path,
     ]
     logger.info("بدء تحويل الملف الصوتي إلى PCM عبر FIFO.")
-    # DEVNULL avoids FFmpeg blocking if its stderr pipe fills up.
     process = await asyncio.create_subprocess_exec(
         *command,
         stdout=subprocess.DEVNULL,
@@ -243,6 +256,30 @@ async def monitor_ffmpeg(process):
         logger.exception("حدث خطأ أثناء مراقبة FFmpeg.")
 
 
+async def start_group_call_with_floodwait(chat_id, max_attempts=2):
+    """Retry join only after Telegram's required FloodWait interval."""
+    global last_flood_wait_until
+    for attempt in range(1, max_attempts + 1):
+        try:
+            logger.info("محاولة الانضمام للمحادثة الصوتية %s (attempt=%s).", chat_id, attempt)
+            # Do not put a shorter asyncio timeout around a Telegram FloodWait.
+            await group_call.start(chat_id)
+            return
+        except FloodWait as error:
+            wait_seconds = int(getattr(error, "value", 0) or getattr(error, "x", 0) or 0)
+            last_flood_wait_until = time.time() + wait_seconds
+            logger.warning(
+                "تيليجرام فرض FloodWait لمدة %s ثانية عند JoinGroupCall.",
+                wait_seconds,
+            )
+            if wait_seconds <= 0:
+                raise
+            if attempt >= max_attempts:
+                raise
+            # Wait the full server-requested duration plus a small safety margin.
+            await asyncio.sleep(wait_seconds + 2)
+
+
 # =========================================================
 # Incoming-message visibility
 # =========================================================
@@ -260,9 +297,6 @@ async def log_incoming_group_messages(client, message):
     )
 
 
-# =========================================================
-# Command observer: records slash commands before specific handlers run.
-# =========================================================
 @app.on_message(filters.group & filters.text & filters.regex(r"^/"), group=-5)
 async def log_group_commands(client, message):
     logger.info(
@@ -398,22 +432,51 @@ async def play_command(client, message):
 
             await status.edit_text("🔊 تم تجهيز الملف.\n⏳ جارٍ الاتصال بالمحادثة الصوتية...")
 
+            # Start group call first; do not make FFmpeg block opening a FIFO
+            # before the voice call is actually joined.
+            await start_group_call_with_floodwait(current_chat_id, max_attempts=2)
+
+            # The network callback may be delayed or have an API-specific context.
+            # Give it up to 45 seconds after start returns, but log whether it fired.
+            try:
+                await asyncio.wait_for(connection_event.wait(), timeout=45)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "انتهت مهلة انتظار حدث الشبكة بعد نجاح group_call.start؛ "
+                    "connected_chat_id=%s network_event_chat_id=%s",
+                    connected_chat_id, network_event_chat_id,
+                )
+                # Do not silently claim that audio is confirmed.
+                await status.edit_text(
+                    "⚠️ طلب الانضمام نُفّذ، لكن لم يصل تأكيد شبكة الصوت بعد.\n"
+                    "راجعي سجلات Render قبل إعادة المحاولة."
+                )
+                return
+
+            # Only start the FIFO producer after the group call has connected.
             process = await start_ffmpeg_stream(current_input_path, current_fifo_path)
             asyncio.create_task(monitor_ffmpeg(process))
             group_call.input_filename = current_fifo_path
 
-            logger.info("بدء اتصال البث بالمجموعة %s", current_chat_id)
-            await asyncio.wait_for(group_call.start(current_chat_id), timeout=40)
-            await asyncio.wait_for(connection_event.wait(), timeout=30)
-
-            logger.info("تم تأكيد اتصال شبكة البث.")
+            logger.info("تم تأكيد اتصال شبكة البث وبدء مصدر الصوت.")
             await status.edit_text(
-                "✅ اتصل البث بالمحادثة الصوتية.\n"
-                "إذا لم يُسمع الصوت، أرسلي /status ثم راجعي سجلات Render."
+                "✅ اتصل البث بالمحادثة الصوتية وبدأ إرسال الصوت."
             )
 
+        except FloodWait as error:
+            wait_seconds = int(getattr(error, "value", 0) or getattr(error, "x", 0) or 0)
+            logger.exception("فرض تيليجرام FloodWait أثناء بدء البث. مدة الانتظار=%s", wait_seconds)
+            if status:
+                try:
+                    await status.edit_text(
+                        f"⏳ تيليجرام طلب الانتظار {wait_seconds} ثانية قبل محاولة الانضمام.\n"
+                        "لم أكرر المحاولة تلقائيًا لتجنب زيادة التقييد."
+                    )
+                except Exception:
+                    logger.exception("تعذر تحديث رسالة FloodWait.")
+            await stop_current_broadcast()
         except asyncio.TimeoutError:
-            logger.exception("انتهت مهلة الاتصال أو تأكيد البث.")
+            logger.exception("انتهت مهلة تشغيل البث.")
             if status:
                 try:
                     await status.edit_text("❌ انتهت مهلة الاتصال بالمحادثة الصوتية. راجعي سجلات Render.")
@@ -437,6 +500,9 @@ async def play_command(client, message):
 
 @app.on_message(filters.command("stop") & filters.group)
 async def stop_command(client, message):
+    if play_lock is None:
+        await message.reply_text("❌ البوت لم يكتمل تهيئته.")
+        return
     async with play_lock:
         if current_chat_id is None:
             await message.reply_text("ℹ️ لا يوجد بث نشط مسجل حاليًا.")
@@ -512,10 +578,8 @@ async def telegram_watchdog():
             if not app.is_connected:
                 logger.error("Pyrogram غير متصل.")
             else:
-                # Verify the session can make a Telegram API request;
-                # is_connected alone does not prove updates are being processed.
                 me = await asyncio.wait_for(app.get_me(), timeout=15)
-                logger.debug("فحص اتصال Telegram ناجح للحساب %s.", me.id)
+                logger.debug("فحص اتصال Telegram API ناجح للحساب %s.", me.id)
             await asyncio.sleep(60)
         except asyncio.CancelledError:
             raise
