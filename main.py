@@ -161,23 +161,9 @@ async def network_status_changed(context, is_connected):
 
 @group_call.on_playout_ended
 async def stream_end_handler(context, folder, filename):
-    """إرسال دعاء كفارة المجلس وتنظيف الملفات عند انتهاء التلاوة"""
-    logger.info("انتهى الملف الصوتي الحالي. جارٍ إرسال دعاء كفارة المجلس وتنظيف الملفات.")
-    global current_chat_id
-    chat_id = current_chat_id
-    
-    await stop_current_broadcast()
-    
-    if chat_id:
-        try:
-            logger.info("محاولة إرسال دعاء كفارة المجلس إلى المجموعة: %s", chat_id)
-            await app.send_message(
-                chat_id,
-                "«سُبْحَانَكَ اللَّهُمَّ وَبِحَمْدِكَ، أَشْهَدُ أَنْ لَا إِلَهَ إِلَّا أَنْتَ أَسْتَغْفِرُكَ وَأَتُوبُ إِلَيْكَ» 🌸"
-            )
-            logger.info("تم إرسال دعاء كفارة المجلس بنجاح عند انتهاء البث.")
-        except Exception as e:
-            logger.exception("تعذر إرسال رسالة انتهاء البث للمجموعة بسبب الخطأ: %s", e)
+    """التعامل مع انتهاء الملف الصوتي وإرسال دعاء كفارة المجلس"""
+    logger.info("انتهى الملف الصوتي الحالي. جارٍ إيقاف البث وإرسال دعاء كفارة المجلس.")
+    await stop_current_broadcast(send_kaffarat=True)
 
 
 # =========================================================
@@ -210,7 +196,7 @@ async def cleanup_files():
     await asyncio.to_thread(delete_path, input_path)
 
 
-async def stop_current_broadcast():
+async def stop_current_broadcast(send_kaffarat=False):
     global current_chat_id, connected_chat_id
     logger.info("بدء إيقاف البث وتنظيف الملفات.")
     stop_succeeded = False
@@ -223,11 +209,25 @@ async def stop_current_broadcast():
     except Exception:
         logger.exception("تعذر إيقاف pytgcalls.")
 
+    chat_to_notify = current_chat_id
     await cleanup_files()
     current_chat_id = None
     connected_chat_id = None
     if connection_event is not None:
         connection_event.clear()
+    
+    # إرسال دعاء كفارة المجلس فور اكتمال الإيقاف إذا طلُب ذلك
+    if send_kaffarat and chat_to_notify:
+        try:
+            logger.info("محاولة إرسال دعاء كفارة المجلس إلى المجموعة: %s", chat_to_notify)
+            await app.send_message(
+                chat_to_notify,
+                "«سُبْحَانَكَ اللَّهُمَّ وَبِحَمْدِكَ، أَشْهَدُ أَنْ لَا إِلَهَ إِلَّا أَنْتَ أَسْتَغْفِرُكَ وَأَتُوبُ إِلَيْكَ» 🌸"
+            )
+            logger.info("تم إرسال دعاء كفارة المجلس بنجاح.")
+        except Exception as e:
+            logger.exception("تعذر إرسال رسالة كفارة المجلس للمجموعة بسبب الخطأ: %s", e)
+
     logger.info("اكتملت محاولة تنظيف البث. stop_succeeded=%s", stop_succeeded)
     return stop_succeeded
 
@@ -393,7 +393,7 @@ async def play_command(client, message):
             status = await message.reply_text("⏳ جارٍ تنزيل ومعالجة الملف الصوتي...")
 
             if current_chat_id is not None:
-                stopped = await stop_current_broadcast()
+                stopped = await stop_current_broadcast(send_kaffarat=False)
                 if not stopped:
                     await status.edit_text("❌ تعذر إيقاف البث السابق بأمان. راجعي سجلات Render.")
                     return
@@ -456,7 +456,7 @@ async def play_command(client, message):
                     )
                 except Exception:
                     logger.exception("تعذر تحديث رسالة FloodWait.")
-            await stop_current_broadcast()
+            await stop_current_broadcast(send_kaffarat=False)
         except asyncio.TimeoutError:
             logger.exception("انتهت مهلة تشغيل البث.")
             if status:
@@ -464,10 +464,10 @@ async def play_command(client, message):
                     await status.edit_text("❌ انتهت مهلة الاتصال بالمحادثة الصوتية. راجعي سجلات Render.")
                 except Exception:
                     logger.exception("تعذر تحديث رسالة الحالة.")
-            await stop_current_broadcast()
+            await stop_current_broadcast(send_kaffarat=False)
         except Exception as error:
             logger.exception("حدث خطأ تفصيلي أثناء تنفيذ /play: %s", error)
-            await stop_current_broadcast()
+            await stop_current_broadcast(send_kaffarat=False)
             if status:
                 try:
                     await status.edit_text(f"❌ تعذر بدء البث.\nالخطأ التفصيلي: {str(error)[:250]}")
@@ -492,7 +492,7 @@ async def stop_command(client, message):
         if current_chat_id != message.chat.id:
             await message.reply_text("⚠️ البث المسجل موجود في مجموعة أخرى.")
             return
-        stopped = await stop_current_broadcast()
+        stopped = await stop_current_broadcast(send_kaffarat=False)
         if stopped:
             await message.reply_text("⏹️ تم إيقاف البث وتنظيف الملفات المؤقتة.")
         else:
@@ -543,7 +543,7 @@ async def main():
             except asyncio.CancelledError:
                 pass
         try:
-            await stop_current_broadcast()
+            await stop_current_broadcast(send_kaffarat=False)
         except Exception:
             logger.exception("حدث خطأ أثناء تنظيف البث عند الإغلاق.")
         try:
