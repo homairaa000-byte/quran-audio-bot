@@ -2,7 +2,6 @@ import os
 import asyncio
 import logging
 import threading
-import subprocess
 import shutil
 import uuid
 import time
@@ -138,6 +137,12 @@ async def network_status_changed(context, is_connected):
         )
 
 
+@group_call.on_stream_end
+async def stream_end_handler(client, update):
+    logger.info("انتهى تشغيل الملف الصوتي بالكامل (Stream ended naturally).")
+    await stop_current_broadcast()
+
+
 # =========================================================
 # Temporary-file and FFmpeg helpers
 # =========================================================
@@ -191,13 +196,13 @@ async def stop_current_broadcast():
 
 
 async def convert_audio_for_call(input_path, output_path):
-    """تحويل الملف الصوتي عبر FFmpeg إلى صيغة PCM ملائمة لـ PyTgCalls"""
+    """تحويل الملف الصوتي عبر FFmpeg إلى صيغة PCM ملائمة لـ PyTgCalls للملفات الطويلة"""
     command = [
         FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
         "-i", input_path, "-vn", "-ac", "2", "-ar", "48000",
         "-acodec", "pcm_s16le", "-f", "s16le", output_path,
     ]
-    logger.info("بدء تحويل الملف الصوتي عبر FFmpeg...")
+    logger.info("بدء تحويل الملف الصوتي الطويل عبر FFmpeg...")
     process = await asyncio.create_subprocess_exec(
         *command,
         stdout=subprocess.PIPE,
@@ -348,7 +353,7 @@ async def play_command(client, message):
                 await message.reply_text("⚠️ الرسالة التي رددتِ عليها لا تحتوي على ملف صوتي.")
                 return
 
-            status = await message.reply_text("⏳ جارٍ تنزيل ومعالجة الملف الصوتي...")
+            status = await message.reply_text("⏳ جارٍ تنزيل ومعالجة الملف الصوتي الطويل...")
 
             if current_chat_id is not None:
                 stopped = await stop_current_broadcast()
@@ -365,10 +370,9 @@ async def play_command(client, message):
 
             logger.info("اكتمل تنزيل الصوت. الحجم=%s بايت", os.path.getsize(downloaded_path))
 
-            # تحضير مسار الملف المحول عبر PCM
             converted_path = os.path.join(DOWNLOAD_DIR, f"audio_{uuid.uuid4().hex}.pcm")
             
-            await status.edit_text("⚙️ جارٍ تحويل الصوت للتوافق مع المكالمة...")
+            await status.edit_text("⚙️ جارٍ تحويل الصوت للتوافق مع البث الطويل...")
             await convert_audio_for_call(downloaded_path, converted_path)
 
             current_input_path = downloaded_path
@@ -381,7 +385,6 @@ async def play_command(client, message):
 
             await status.edit_text("🔊 تمت المعالجة.\n⏳ جارٍ الاتصال بالمحادثة الصوتية...")
 
-            # الانضمام للمحادثة الصوتية
             await start_group_call_with_floodwait(current_chat_id, max_attempts=2)
 
             try:
@@ -398,13 +401,12 @@ async def play_command(client, message):
                 )
                 return
 
-            # تعيين الملف المحول إلى PyTgCalls
             group_call.input_filename = current_converted_path
             logger.info("تم تعيين الملف المحول بنجاح لـ PyTgCalls: %s", current_converted_path)
 
-            logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل الصوت بنجاح.")
+            logger.info("تم تأكيد اتصال شبكة البث وبدء تشغيل الملف الطويل بنجاح.")
             await status.edit_text(
-                "✅ اتصل البث بالمحادثة الصوتية وبدأ تشغيل التلاوة بنجاح."
+                "✅ اتصل البث بالمحادثة الصوتية وبدأ بث التلاوة الطويلة بنجاح."
             )
 
         except FloodWait as error:
