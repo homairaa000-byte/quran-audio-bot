@@ -157,9 +157,8 @@ async def network_status_changed(context, is_connected):
 
 @group_call.on_playout_ended
 async def stream_end_handler(*args, **kwargs):
-    """إصلاح الوسائط الممررة مرونة لمنع انهيار البرنامج واستدعاء الكفارة"""
-    logger.info("انتهى الملف الصوتي عبر حدث PyTgCalls. جارٍ إيقاف البث وإرسال دعاء كفارة المجلس.")
-    await stop_current_broadcast(send_kaffarat=True)
+    """مرونة تامة لحدث انتهاء البث (كمرجع احتياطي)"""
+    logger.info("تلقي إشعار انتهاء البث من المكتبة.")
 
 
 # =========================================================
@@ -266,24 +265,25 @@ async def get_audio_duration(file_path):
 
 
 async def schedule_auto_stop(duration, chat_id):
-    """مؤقت خلفي ينتهي بانتهاء مدة الصوت ليوقف البث ويرسل الدعاء تلقائياً"""
+    """المؤقت الذاتي: المسؤول الأساسي والمضمون عن إيقاف البث وإرسال دعاء الكفارة"""
     try:
         logger.info("تم جدولة إيقاف البث التلقائي بعد %.1f ثانية.", duration)
-        await asyncio.sleep(duration + 2)
+        await asyncio.sleep(duration + 1)
+        
         if current_chat_id == chat_id:
-            logger.info("انتهت مدة الملف الصوتي تماماً. جارٍ الإيقاف التلقائي وإرسال الكفارة...")
+            logger.info("انتهت مدة الملف الصوتي تماماً عبر المؤقت. جارٍ الإيقاف التلقائي وإرسال الكفارة...")
             await stop_current_broadcast(send_kaffarat=True)
     except asyncio.CancelledError:
-        logger.info("تم إلغاء مؤقت الإيقاف التلقائي.")
+        logger.info("تم إلغاء مؤقت الإيقاف التلقائي (بسبب إيقاف يدوي عبر /stop).")
     except Exception:
         logger.exception("خطأ في مؤقت الإيقاف التلقائي.")
 
 
 async def convert_audio_for_call(input_path, output_path):
-    """تحويل الملف الصوتي عبر FFmpeg إلى صيغة PCM بشكل مرن يغطي الأخطاء الهيكلية للملفات"""
+    """تحويل الملف الصوتي عبر FFmpeg إلى صيغة PCM مع مرونة تامة للأخطاء"""
     command = [
         FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-        "-err_detect", "ignore_err",  # التغاضي عن الإطارات التالفة
+        "-err_detect", "ignore_err",
         "-i", input_path, "-vn", "-ac", "2", "-ar", "48000",
         "-acodec", "pcm_s16le", "-f", "s16le", output_path,
     ]
@@ -399,7 +399,6 @@ async def play_command(client, message):
                     await status.edit_text("❌ تعذر إيقاف البث السابق بأمان.")
                     return
 
-            # جلب الرسالة الحديثة للرد تجنباً لتنفيذ روابط ملفات منتهية الصلاحية
             fresh_message = await client.get_messages(message.chat.id, target.id)
             fresh_target = fresh_message if fresh_message else target
 
@@ -408,7 +407,7 @@ async def play_command(client, message):
                 file_name=DOWNLOAD_DIR + os.sep,
             )
             if not downloaded_path or not os.path.isfile(downloaded_path) or os.path.getsize(downloaded_path) == 0:
-                raise RuntimeError("تعذر تنزيل الملف الصوتي بنجاح (قد تكون صلاحية الملف قد انتهت). أعد إعادة إرسال الملف.")
+                raise RuntimeError("تعذر تنزيل الملف الصوتي بنجاح. أعد إعادة إرسال الملف.")
 
             audio_duration = await get_audio_duration(downloaded_path)
             converted_path = os.path.join(DOWNLOAD_DIR, f"audio_{uuid.uuid4().hex}.pcm")
