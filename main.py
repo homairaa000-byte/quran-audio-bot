@@ -280,9 +280,10 @@ async def schedule_auto_stop(duration, chat_id):
 
 
 async def convert_audio_for_call(input_path, output_path):
-    """تحويل الملف الصوتي عبر FFmpeg إلى صيغة PCM"""
+    """تحويل الملف الصوتي عبر FFmpeg إلى صيغة PCM بشكل مرن يغطي الأخطاء الهيكلية للملفات"""
     command = [
         FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+        "-err_detect", "ignore_err",  # التغاضي عن الإطارات التالفة
         "-i", input_path, "-vn", "-ac", "2", "-ar", "48000",
         "-acodec", "pcm_s16le", "-f", "s16le", output_path,
     ]
@@ -398,12 +399,16 @@ async def play_command(client, message):
                     await status.edit_text("❌ تعذر إيقاف البث السابق بأمان.")
                     return
 
+            # جلب الرسالة الحديثة للرد تجنباً لتنفيذ روابط ملفات منتهية الصلاحية
+            fresh_message = await client.get_messages(message.chat.id, target.id)
+            fresh_target = fresh_message if fresh_message else target
+
             downloaded_path = await client.download_media(
-                target,
+                fresh_target,
                 file_name=DOWNLOAD_DIR + os.sep,
             )
-            if not downloaded_path or not os.path.isfile(downloaded_path):
-                raise RuntimeError("تعذر تنزيل الملف الصوتي.")
+            if not downloaded_path or not os.path.isfile(downloaded_path) or os.path.getsize(downloaded_path) == 0:
+                raise RuntimeError("تعذر تنزيل الملف الصوتي بنجاح (قد تكون صلاحية الملف قد انتهت). أعد إعادة إرسال الملف.")
 
             audio_duration = await get_audio_duration(downloaded_path)
             converted_path = os.path.join(DOWNLOAD_DIR, f"audio_{uuid.uuid4().hex}.pcm")
@@ -491,7 +496,7 @@ async def main():
         await app.start()
         me = await app.get_me()
         logger.info("تم الاتصال بتيليجرام. account_id=%s username=%s", me.id, me.username)
-        monitor_task = asyncio.task = asyncio.create_task(telegram_watchdog())
+        monitor_task = asyncio.create_task(telegram_watchdog())
         await idle()
     except Exception:
         logger.exception("حدث خطأ في التشغيل الرئيسي.")
