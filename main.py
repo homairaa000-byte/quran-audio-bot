@@ -155,12 +155,6 @@ async def network_status_changed(context, is_connected):
         logger.warning("حدث اتصال شبكة الصوت: connected=False chat_id=%s", chat_id)
 
 
-@group_call.on_playout_ended
-async def stream_end_handler(*args, **kwargs):
-    """مرونة تامة لحدث انتهاء البث (كمرجع احتياطي)"""
-    logger.info("تلقي إشعار انتهاء البث من المكتبة.")
-
-
 # =========================================================
 # Helpers
 # =========================================================
@@ -242,7 +236,7 @@ async def stop_current_broadcast(send_kaffarat=False):
 
 
 async def get_audio_duration(file_path):
-    """استخراج مدة الملف الصوتي بالثواني"""
+    """استخراج مدة الملف الصوتي بالثواني بدقة"""
     ffprobe_cmd = FFMPEG.replace("ffmpeg", "ffprobe") if "ffmpeg" in FFMPEG else "ffprobe"
     command = [
         ffprobe_cmd, "-v", "error",
@@ -265,16 +259,19 @@ async def get_audio_duration(file_path):
 
 
 async def schedule_auto_stop(duration, chat_id):
-    """المؤقت الذاتي: المسؤول الأساسي والمضمون عن إيقاف البث وإرسال دعاء الكفارة"""
+    """المؤقت الذاتي الإجباري: ينهي البث ويرسل كفارة المجلس فور انقضاء ثواني التلاوة بدقة"""
     try:
         logger.info("تم جدولة إيقاف البث التلقائي بعد %.1f ثانية.", duration)
-        await asyncio.sleep(duration + 1)
+        # الانتظار طوال مدة الصوت كاملة
+        await asyncio.sleep(duration + 1.5)
         
+        # التأكد من أن هذا البث ما زال هو النشيط حالياً
         if current_chat_id == chat_id:
-            logger.info("انتهت مدة الملف الصوتي تماماً عبر المؤقت. جارٍ الإيقاف التلقائي وإرسال الكفارة...")
-            await stop_current_broadcast(send_kaffarat=True)
+            logger.info("انتهت مدة التلاوة بالكامل. جارٍ تنفيذ الإيقاف التلقائي وإرسال الكفارة...")
+            async with play_lock:
+                await stop_current_broadcast(send_kaffarat=True)
     except asyncio.CancelledError:
-        logger.info("تم إلغاء مؤقت الإيقاف التلقائي (بسبب إيقاف يدوي عبر /stop).")
+        logger.info("تم إلغاء مؤقت الإيقاف التلقائي (بسبب إيقاف يدوي سابق عبر /stop).")
     except Exception:
         logger.exception("خطأ في مؤقت الإيقاف التلقائي.")
 
