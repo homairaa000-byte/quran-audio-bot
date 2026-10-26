@@ -268,10 +268,10 @@ async def schedule_auto_stop(duration, chat_id):
         logger.info("تم جدولة إيقاف البث التلقائي بعد %.1f ثانية.", duration)
         await asyncio.sleep(duration + 1.0)
         
+        global current_chat_id, connected_chat_id, auto_stop_task
         if current_chat_id == chat_id:
             logger.info("انتهت مدة التلاوة بالكامل. تنفيذ الإيقاف القسري وإرسال الدعاء...")
             
-            # [تعديل حاسم] إلغاء مسار الصوت تماماً لمنع إعادة التشغيل
             try:
                 group_call.input_filename = ""
             except Exception:
@@ -280,7 +280,6 @@ async def schedule_auto_stop(duration, chat_id):
             chat_to_notify = chat_id
             await cleanup_files()
             
-            global current_chat_id, connected_chat_id, auto_stop_task
             current_chat_id = None
             connected_chat_id = None
             if connection_event is not None:
@@ -289,7 +288,6 @@ async def schedule_auto_stop(duration, chat_id):
                 auto_stop_task.cancel()
                 auto_stop_task = None
 
-            # إرسال دعاء كفارة المجلس كدليل قاطع على انتهاء البث
             try:
                 await app.send_message(
                     chat_to_notify,
@@ -299,7 +297,6 @@ async def schedule_auto_stop(duration, chat_id):
             except Exception as e:
                 logger.error("فشل إرسال كفارة المجلس تلقائياً: %s", e)
 
-            # فصل المكالمة قسرياً لمنع إعادة الاتصال
             try:
                 await group_call.stop()
             except Exception:
