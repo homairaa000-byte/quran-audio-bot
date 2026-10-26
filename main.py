@@ -219,9 +219,9 @@ async def stop_current_broadcast(send_kaffarat=False):
         pass
 
     try:
-        await asyncio.wait_for(group_call.stop(), timeout=10)
+        await asyncio.wait_for(group_call.stop(), timeout=5)
     except Exception:
-        logger.exception("خطأ أثناء إيقاف مجموعة المكالمة.")
+        pass
 
     await cleanup_files()
     
@@ -263,14 +263,47 @@ async def get_audio_duration(file_path):
 
 
 async def schedule_auto_stop(duration, chat_id):
-    """المؤقت الذاتي النهائي: يضمن إيقاف البث وإرسال الدعاء والخروج التام بدون إعادة تشغيل"""
+    """المؤقت الذاتي القسري: ينهي البث ويزيل الملفات ويرسل الدعاء ويغلق المكالمة نهائياً دون تكرار"""
     try:
         logger.info("تم جدولة إيقاف البث التلقائي بعد %.1f ثانية.", duration)
         await asyncio.sleep(duration + 1.0)
         
         if current_chat_id == chat_id:
-            logger.info("انتهت مدة التلاوة بالكامل. إيقاف نهائي وإرسال الكفارة...")
-            await stop_current_broadcast(send_kaffarat=True)
+            logger.info("انتهت مدة التلاوة بالكامل. تنفيذ الإيقاف القسري وإرسال الدعاء...")
+            
+            # [تعديل حاسم] إلغاء مسار الصوت تماماً لمنع إعادة التشغيل
+            try:
+                group_call.input_filename = ""
+            except Exception:
+                pass
+
+            chat_to_notify = chat_id
+            await cleanup_files()
+            
+            global current_chat_id, connected_chat_id, auto_stop_task
+            current_chat_id = None
+            connected_chat_id = None
+            if connection_event is not None:
+                connection_event.clear()
+            if auto_stop_task and not auto_stop_task.done():
+                auto_stop_task.cancel()
+                auto_stop_task = None
+
+            # إرسال دعاء كفارة المجلس كدليل قاطع على انتهاء البث
+            try:
+                await app.send_message(
+                    chat_to_notify,
+                    "«سُبْحَانَكَ اللَّهُمَّ وَبِحَمْدِكَ، أَشْهَدُ أَنْ لَا إِلَهَ إِلَّا أَنْتَ أَسْتَغْفِرُكَ وَأَتُوبُ إِلَيْكَ» 🌸"
+                )
+                logger.info("تم إرسال كفارة المجلس تلقائياً بنجاح.")
+            except Exception as e:
+                logger.error("فشل إرسال كفارة المجلس تلقائياً: %s", e)
+
+            # فصل المكالمة قسرياً لمنع إعادة الاتصال
+            try:
+                await group_call.stop()
+            except Exception:
+                pass
     except asyncio.CancelledError:
         logger.info("تم إلغاء مؤقت الإيقاف التلقائي.")
     except Exception:
@@ -419,6 +452,10 @@ async def stop_command(client, message):
             await message.reply_text("ℹ️ لا يوجد بث نشط حاليًا.")
             return
         stopped = await stop_current_broadcast(send_kaffarat=True)
+        try:
+            await group_call.stop()
+        except Exception:
+            pass
         if stopped:
             await message.reply_text("⏹️ تم إيقاف البث وتنظيف الملفات وإرسال الدعاء.")
 
