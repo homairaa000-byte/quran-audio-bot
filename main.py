@@ -217,6 +217,7 @@ async def stop_current_broadcast(send_kaffarat=False):
 
     chat_to_notify = current_chat_id
     await cleanup_files()
+    
     current_chat_id = None
     connected_chat_id = None
     if connection_event is not None:
@@ -255,14 +256,24 @@ async def get_audio_duration(file_path):
 
 
 async def schedule_auto_stop(duration, chat_id):
-    """مؤقت خلفي مضمون لإنهاء البث وإرسال الدعاء فور انتهاء الوقت"""
+    """المؤقت الذاتي الإجباري: ينتهي تماماً في وقته ويوقف التكرار ويسلم الدعاء فقط"""
     try:
         logger.info("تم جدولة إيقاف البث التلقائي بعد %.1f ثانية.", duration)
-        await asyncio.sleep(duration + 1.5)
+        await asyncio.sleep(duration + 1.0)
         
         if current_chat_id == chat_id:
-            logger.info("انتهت مدة التلاوة تماماً عبر المؤقت. جارٍ إيقاف البث وإرسال الكفارة...")
+            logger.info("انتهت مدة التلاوة بالكامل. إيقاف البث وإرسال الكفارة قسرياً...")
+            try:
+                group_call.input_filename = ""
+            except Exception:
+                pass
+            
             await stop_current_broadcast(send_kaffarat=True)
+            
+            try:
+                await group_call.stop()
+            except Exception:
+                pass
     except asyncio.CancelledError:
         logger.info("تم إلغاء مؤقت الإيقاف التلقائي.")
     except Exception:
@@ -383,7 +394,8 @@ async def play_command(client, message):
             if audio_duration > 0:
                 auto_stop_task = asyncio.create_task(schedule_auto_stop(audio_duration, current_chat_id))
 
-            await status.edit_text("✅ بدأ بث التلاوة بنجاح وسيتم إنهاؤها وإرسال الدعاء تلقائياً عند نهايتها.")
+            # [تم التعديل هنا] رسالة بدء مختصرة ونظيفة تماماً
+            await status.edit_text("✅ بدأ البث بنجاح")
 
         except Exception as error:
             logger.exception("خطأ في /play: %s", error)
@@ -411,6 +423,10 @@ async def stop_command(client, message):
             await message.reply_text("ℹ️ لا يوجد بث نشط حاليًا.")
             return
         stopped = await stop_current_broadcast(send_kaffarat=True)
+        try:
+            await group_call.stop()
+        except Exception:
+            pass
         if stopped:
             await message.reply_text("⏹️ تم إيقاف البث وتنظيف الملفات وإرسال الدعاء.")
 
