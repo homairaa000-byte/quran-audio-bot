@@ -37,15 +37,29 @@ RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 PORT = int(os.getenv("PORT", "10000"))
 
 if not API_ID or not API_HASH or not SESSION_STRING:
-    raise RuntimeError("تأكدي من وجود API_ID وAPI_HASH وSESSION_STRING في Render.")
+    raise RuntimeError(
+        "تأكدي من وجود API_ID وAPI_HASH وSESSION_STRING في Render."
+    )
 
 API_ID = int(API_ID)
+
 FFMPEG = shutil.which("ffmpeg")
+
 if not FFMPEG:
     raise RuntimeError("لم يُعثر على ffmpeg في بيئة التشغيل.")
 
 DOWNLOAD_DIR = "/tmp/quran_audio_bot"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# =========================================================
+# Broadcast Settings
+# =========================================================
+
+# مهلة أمان إضافية بعد نهاية الملف الصوتي
+SAFETY_MARGIN_SECONDS = 15
+
+# مهلة انتظار الاتصال بالمحادثة الصوتية
+CONNECTION_TIMEOUT = 45
 
 # =========================================================
 # Web server & Self-Ping
@@ -105,6 +119,7 @@ def run_web():
 
 def self_ping_worker():
     target_url = RENDER_EXTERNAL_URL or f"http://127.0.0.1:{PORT}/ping"
+
     if not target_url.startswith("http"):
         target_url = f"https://{target_url}/ping"
     elif not target_url.endswith("/ping"):
@@ -112,10 +127,16 @@ def self_ping_worker():
 
     while not shutting_down:
         time.sleep(240)
+
         try:
-            req = urllib.request.Request(target_url, headers={"User-Agent": "SelfPingBot"})
+            req = urllib.request.Request(
+                target_url,
+                headers={"User-Agent": "SelfPingBot"}
+            )
+
             with urllib.request.urlopen(req, timeout=10) as response:
                 pass
+
         except Exception:
             pass
 
@@ -132,6 +153,7 @@ group_call = GroupCallFactory(
 @group_call.on_network_status_changed
 async def network_status_changed(context, is_connected):
     global connected_chat_id, last_network_event_at
+
     from datetime import datetime, timezone
 
     last_network_event_at = datetime.now(timezone.utc).isoformat()
@@ -139,30 +161,42 @@ async def network_status_changed(context, is_connected):
 
     if is_connected:
         connected_chat_id = chat_id
+
         if connection_event is not None:
             connection_event.set()
+
     else:
         connected_chat_id = None
+
         if connection_event is not None:
             connection_event.clear()
-        
+
         if chat_id and not shutting_down:
             asyncio.create_task(attempt_reconnect(chat_id))
 
 
 async def attempt_reconnect(chat_id):
     for attempt in range(1, 4):
+
         if connected_chat_id == chat_id or current_chat_id != chat_id:
             return
+
         try:
             await asyncio.sleep(3)
+
             if current_chat_id == chat_id:
                 await group_call.start(chat_id)
+
                 if current_converted_path and os.path.exists(current_converted_path):
                     group_call.input_filename = current_converted_path
+
                 return
+
         except Exception:
-            pass
+            logger.warning(
+                "فشلت محاولة إعادة الاتصال رقم %s",
+                attempt
+            )
 
 
 # =========================================================
@@ -171,7 +205,12 @@ async def attempt_reconnect(chat_id):
 async def is_admin(client, chat_id, user_id):
     try:
         member = await client.get_chat_member(chat_id, user_id)
-        return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+
+        return member.status in [
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.OWNER
+        ]
+
     except Exception:
         return False
 
@@ -179,17 +218,21 @@ async def is_admin(client, chat_id, user_id):
 def delete_path(path):
     if not path:
         return
+
     try:
         if os.path.lexists(path):
             os.remove(path)
+
     except OSError:
         pass
 
 
 async def cleanup_files():
     global current_input_path, current_converted_path
+
     input_path = current_input_path
     converted_path = current_converted_path
+
     current_input_path = None
     current_converted_path = None
 
@@ -202,161 +245,330 @@ async def cleanup_files():
     await asyncio.to_thread(delete_path, input_path)
 
 
+# =========================================================
+# Stop Broadcast
+# =========================================================
 async def stop_current_broadcast(send_kaffarat=False):
+
     global current_chat_id, connected_chat_id, auto_stop_task
-    
+
     if auto_stop_task and not auto_stop_task.done():
         auto_stop_task.cancel()
         auto_stop_task = None
 
-    logger.info("بدء إيقاف البث وتنظيف الملفات. send_kaffarat=%s", send_kaffarat)
-    
+    logger.info(
+        "بدء إيقاف البث وتنظيف الملفات. send_kaffarat=%s",
+        send_kaffarat
+    )
+
     chat_to_notify = current_chat_id
-    
+
+    # إيقاف مصدر الصوت أولاً
     try:
         group_call.input_filename = ""
     except Exception:
         pass
 
+    # إيقاف المحادثة الصوتية
     try:
-        await asyncio.wait_for(group_call.stop(), timeout=5)
-    except Exception:
-        pass
+        await asyncio.wait_for(
+            group_call.stop(),
+            timeout=15
+        )
+    except Exception as e:
+        logger.warning("ملاحظة أثناء إيقاف الاتصال: %s", e)
 
+    # حذف الملفات بعد محاولة إيقاف البث
     await cleanup_files()
-    
+
     current_chat_id = None
     connected_chat_id = None
+
     if connection_event is not None:
         connection_event.clear()
-    
+
+    # إرسال كفارة المجلس عند الإيقاف اليدوي
     if send_kaffarat and chat_to_notify:
+
         try:
-            logger.info("جارٍ إرسال رسالة كفارة المجلس إلى المجموعة: %s", chat_to_notify)
+            logger.info(
+                "جارٍ إرسال رسالة كفارة المجلس إلى المجموعة: %s",
+                chat_to_notify
+            )
+
             await app.send_message(
                 chat_to_notify,
                 "«سُبْحَانَكَ اللَّهُمَّ وَبِحَمْدِكَ، أَشْهَدُ أَنْ لَا إِلَهَ إِلَّا أَنْتَ أَسْتَغْفِرُكَ وَأَتُوبُ إِلَيْكَ» 🌸"
             )
+
             logger.info("تم إرسال كفارة المجلس بنجاح.")
+
         except Exception as e:
             logger.error("فشل إرسال كفارة المجلس: %s", e)
+
     return True
 
 
+# =========================================================
+# Audio Duration
+# =========================================================
 async def get_audio_duration(file_path):
-    ffprobe_cmd = FFMPEG.replace("ffmpeg", "ffprobe") if "ffmpeg" in FFMPEG else "ffprobe"
+
+    ffprobe_cmd = (
+        FFMPEG.replace("ffmpeg", "ffprobe")
+        if "ffmpeg" in FFMPEG
+        else "ffprobe"
+    )
+
     command = [
-        ffprobe_cmd, "-v", "error",
-        "-show_entries", "format=duration", "-of",
-        "default=noprint_wrappers=1:nokey=1", file_path
+        ffprobe_cmd,
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        file_path
     ]
+
     try:
         process = await asyncio.create_subprocess_exec(
-            *command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            *command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
+
         stdout, _ = await process.communicate()
+
         if process.returncode == 0:
             return float(stdout.decode().strip())
+
     except Exception:
         pass
+
     return 0.0
 
 
+# =========================================================
+# Automatic Stop Timer
+# =========================================================
 async def schedule_auto_stop(duration, chat_id):
-    """المؤقت الذاتي القسري: ينهي البث ويزيل الملفات ويرسل الدعاء ويغلق المكالمة نهائياً دون تكرار"""
+
+    global current_chat_id
+    global connected_chat_id
+    global auto_stop_task
+
     try:
-        logger.info("تم جدولة إيقاف البث التلقائي بعد %.1f ثانية.", duration)
-        await asyncio.sleep(duration + 1.0)
-        
-        global current_chat_id, connected_chat_id, auto_stop_task
-        if current_chat_id == chat_id:
-            logger.info("انتهت مدة التلاوة بالكامل. تنفيذ الإيقاف القسري وإرسال الدعاء...")
-            
+
+        # إضافة مهلة أمان بعد انتهاء الصوت
+        total_wait = duration + SAFETY_MARGIN_SECONDS
+
+        logger.info(
+            "مدة الصوت: %.2f ثانية | مهلة الأمان: %d ثانية | إجمالي الانتظار: %.2f ثانية",
+            duration,
+            SAFETY_MARGIN_SECONDS,
+            total_wait
+        )
+
+        await asyncio.sleep(total_wait)
+
+        # انتظار انتهاء أي عملية تشغيل أو إيقاف جارية
+        async with play_lock:
+
+            # التأكد أن البث نفسه ما زال نشطاً
+            if current_chat_id != chat_id:
+                return
+
+            logger.info(
+                "انتهت مدة التلاوة مع مهلة الأمان. جارٍ إيقاف البث."
+            )
+
+            # إيقاف مصدر الصوت
             try:
                 group_call.input_filename = ""
             except Exception:
                 pass
 
-            chat_to_notify = chat_id
+            # إيقاف الاتصال الصوتي أولاً
+            try:
+                await asyncio.wait_for(
+                    group_call.stop(),
+                    timeout=15
+                )
+
+            except Exception as e:
+                logger.warning(
+                    "ملاحظة أثناء الإيقاف التلقائي: %s",
+                    e
+                )
+
+            # تنظيف الملفات بعد إيقاف الاتصال
             await cleanup_files()
-            
+
             current_chat_id = None
             connected_chat_id = None
+
             if connection_event is not None:
                 connection_event.clear()
-            if auto_stop_task and not auto_stop_task.done():
-                auto_stop_task.cancel()
-                auto_stop_task = None
 
+            # إنهاء مرجع المؤقت دون إلغاء المهمة الحالية
+            auto_stop_task = None
+
+            # إرسال الدعاء بعد انتهاء البث
             try:
+
                 await app.send_message(
-                    chat_to_notify,
+                    chat_id,
                     "«سُبْحَانَكَ اللَّهُمَّ وَبِحَمْدِكَ، أَشْهَدُ أَنْ لَا إِلَهَ إِلَّا أَنْتَ أَسْتَغْفِرُكَ وَأَتُوبُ إِلَيْكَ» 🌸"
                 )
-                logger.info("تم إرسال كفارة المجلس تلقائياً بنجاح.")
+
+                logger.info(
+                    "تم إرسال كفارة المجلس تلقائياً بعد انتهاء البث."
+                )
+
             except Exception as e:
-                logger.error("فشل إرسال كفارة المجلس تلقائياً: %s", e)
 
-            try:
-                await group_call.stop()
-            except Exception:
-                pass
+                logger.error(
+                    "فشل إرسال كفارة المجلس تلقائياً: %s",
+                    e
+                )
+
     except asyncio.CancelledError:
+
         logger.info("تم إلغاء مؤقت الإيقاف التلقائي.")
+
     except Exception:
-        logger.exception("حدث خطأ في مؤقت الإيقاف التلقائي.")
+
+        logger.exception(
+            "حدث خطأ في مؤقت الإيقاف التلقائي."
+        )
 
 
+# =========================================================
+# Audio Conversion
+# =========================================================
 async def convert_audio_for_call(input_path, output_path):
+
     command = [
-        FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+        FFMPEG,
+        "-hide_banner",
+        "-loglevel", "error",
+        "-y",
         "-err_detect", "ignore_err",
-        "-i", input_path, "-vn", "-ac", "2", "-ar", "48000",
-        "-acodec", "pcm_s16le", "-f", "s16le", output_path,
+        "-i", input_path,
+        "-vn",
+        "-ac", "2",
+        "-ar", "48000",
+        "-acodec", "pcm_s16le",
+        "-f", "s16le",
+        output_path,
     ]
+
     process = await asyncio.create_subprocess_exec(
-        *command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        *command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
+
     _, stderr = await process.communicate()
+
     if process.returncode != 0:
-        err_msg = stderr.decode('utf-8', errors='ignore')
-        raise RuntimeError(f"فشل معالجة الملف الصوتي عبر FFmpeg: {err_msg[:150]}")
+
+        err_msg = stderr.decode(
+            "utf-8",
+            errors="ignore"
+        )
+
+        raise RuntimeError(
+            f"فشل معالجة الملف الصوتي عبر FFmpeg: {err_msg[:150]}"
+        )
 
 
-async def start_group_call_with_floodwait(chat_id, max_attempts=2):
+# =========================================================
+# FloodWait Protection
+# =========================================================
+async def start_group_call_with_floodwait(
+    chat_id,
+    max_attempts=2
+):
+
     global last_flood_wait_until
+
     for attempt in range(1, max_attempts + 1):
+
         try:
+
             await group_call.start(chat_id)
             return
+
         except FloodWait as error:
-            wait_seconds = int(getattr(error, "value", 0) or getattr(error, "x", 0) or 0)
+
+            wait_seconds = int(
+                getattr(error, "value", 0)
+                or getattr(error, "x", 0)
+                or 0
+            )
+
             last_flood_wait_until = time.time() + wait_seconds
+
             if wait_seconds <= 0 or attempt >= max_attempts:
                 raise
+
             await asyncio.sleep(wait_seconds + 2)
 
 
 # =========================================================
 # Commands
 # =========================================================
+
+# -------------------------
+# /ping
+# -------------------------
 @app.on_message(filters.command("ping") & filters.group)
 async def ping_command(client, message):
+
     await message.reply_text("البوت يعمل ✅")
 
 
+# -------------------------
+# /status
+# -------------------------
 @app.on_message(filters.command("status") & filters.group)
 async def status_command(client, message):
-    broadcast = "نشط ومستقر" if current_chat_id is not None else "لا يوجد بث"
-    await message.reply_text(f"📊 حالة البوت: {broadcast}")
+
+    broadcast = (
+        "نشط ومستقر"
+        if current_chat_id is not None
+        else "لا يوجد بث"
+    )
+
+    await message.reply_text(
+        f"📊 حالة البوت: {broadcast}"
+    )
 
 
+# -------------------------
+# /play
+# -------------------------
 @app.on_message(filters.command("play") & filters.group)
 async def play_command(client, message):
-    global current_chat_id, current_input_path, current_converted_path, connected_chat_id, auto_stop_task
-    
-    if not message.from_user or not await is_admin(client, message.chat.id, message.from_user.id):
-        await message.reply_text("⚠️ هذا الأمر مقتصر على مشرفي المجموعة فقط.")
+
+    global current_chat_id
+    global current_input_path
+    global current_converted_path
+    global connected_chat_id
+    global auto_stop_task
+
+    if (
+        not message.from_user
+        or not await is_admin(
+            client,
+            message.chat.id,
+            message.from_user.id
+        )
+    ):
+
+        await message.reply_text(
+            "⚠️ هذا الأمر مقتصر على مشرفي المجموعة فقط."
+        )
+
         return
 
     status = None
@@ -364,120 +576,329 @@ async def play_command(client, message):
     converted_path = None
 
     async with play_lock:
+
         try:
+
             target = message.reply_to_message
+
             if target is None:
-                await message.reply_text("⚠️ ردّي على رسالة صوتية أو ملف صوتي ثم أرسلي /play.")
+
+                await message.reply_text(
+                    "⚠️ ردّي على رسالة صوتية أو ملف صوتي ثم أرسلي /play."
+                )
+
                 return
 
             is_audio = bool(
-                target.audio or target.voice or
-                (target.document and (target.document.mime_type or "").startswith("audio/"))
+                target.audio
+                or target.voice
+                or (
+                    target.document
+                    and (
+                        target.document.mime_type or ""
+                    ).startswith("audio/")
+                )
             )
+
             if not is_audio:
-                await message.reply_text("⚠️ الرسالة التي رددتِ عليها لا تحتوي على ملف صوتي.")
+
+                await message.reply_text(
+                    "⚠️ الرسالة التي رددتِ عليها لا تحتوي على ملف صوتي."
+                )
+
                 return
 
-            status = await message.reply_text("⏳ جارٍ تنزيل ومعالجة الملف الصوتي...")
+            status = await message.reply_text(
+                "⏳ جارٍ تنزيل ومعالجة الملف الصوتي..."
+            )
 
+            # إيقاف أي بث سابق
             if current_chat_id is not None:
-                await stop_current_broadcast(send_kaffarat=False)
 
-            fresh_message = await client.get_messages(message.chat.id, target.id)
-            fresh_target = fresh_message if fresh_message else target
+                await stop_current_broadcast(
+                    send_kaffarat=False
+                )
 
+            fresh_message = await client.get_messages(
+                message.chat.id,
+                target.id
+            )
+
+            fresh_target = (
+                fresh_message
+                if fresh_message
+                else target
+            )
+
+            # تنزيل الملف الصوتي
             downloaded_path = await client.download_media(
                 fresh_target,
                 file_name=DOWNLOAD_DIR + os.sep,
             )
-            if not downloaded_path or not os.path.isfile(downloaded_path) or os.path.getsize(downloaded_path) == 0:
-                raise RuntimeError("تعذر تنزيل الملف الصوتي.")
 
-            audio_duration = await get_audio_duration(downloaded_path)
-            converted_path = os.path.join(DOWNLOAD_DIR, f"audio_{uuid.uuid4().hex}.pcm")
-            
-            await status.edit_text("⚙️ جارٍ تحويل الصوت للتوافق مع البث...")
-            await convert_audio_for_call(downloaded_path, converted_path)
+            if (
+                not downloaded_path
+                or not os.path.isfile(downloaded_path)
+                or os.path.getsize(downloaded_path) == 0
+            ):
 
+                raise RuntimeError(
+                    "تعذر تنزيل الملف الصوتي."
+                )
+
+            # إنشاء مسار الملف المحوّل
+            converted_path = os.path.join(
+                DOWNLOAD_DIR,
+                f"audio_{uuid.uuid4().hex}.pcm"
+            )
+
+            await status.edit_text(
+                "⚙️ جارٍ تحويل الصوت للتوافق مع البث..."
+            )
+
+            # تحويل الصوت
+            await convert_audio_for_call(
+                downloaded_path,
+                converted_path
+            )
+
+            # =================================================
+            # حساب مدة الصوت الحقيقية من ملف PCM
+            # =================================================
+
+            pcm_size = os.path.getsize(converted_path)
+
+            # 48000 عينة في الثانية
+            # قناتان صوتيتان
+            # 2 بايت لكل عينة
+
+            audio_duration = pcm_size / 192000
+
+            logger.info(
+                "حجم ملف PCM: %s بايت",
+                pcm_size
+            )
+
+            logger.info(
+                "مدة الصوت الفعلية بعد التحويل: %.2f ثانية",
+                audio_duration
+            )
+
+            if audio_duration <= 0:
+
+                raise RuntimeError(
+                    "تعذر تحديد مدة الملف الصوتي."
+                )
+
+            # حفظ مسارات الملفات الحالية
             current_input_path = downloaded_path
             current_converted_path = converted_path
+
             downloaded_path = None
             converted_path = None
+
             current_chat_id = message.chat.id
             connected_chat_id = None
+
             connection_event.clear()
 
-            await status.edit_text("🔊 جارٍ الاتصال بالمحادثة الصوتية وبدء البث...")
-            await start_group_call_with_floodwait(current_chat_id, max_attempts=2)
+            await status.edit_text(
+                "🔊 جارٍ الاتصال بالمحادثة الصوتية وبدء البث..."
+            )
 
+            # الاتصال بالمحادثة الصوتية
+            await start_group_call_with_floodwait(
+                current_chat_id,
+                max_attempts=2
+            )
+
+            # انتظار تأكيد الاتصال
             try:
-                await asyncio.wait_for(connection_event.wait(), timeout=45)
-            except asyncio.TimeoutError:
-                await status.edit_text("⚠️ استغرق الاتصال وقتًا طويلًا، تأكدي من فتح المكالمة في المجموعة.")
-                return
 
+                await asyncio.wait_for(
+                    connection_event.wait(),
+                    timeout=CONNECTION_TIMEOUT
+                )
+
+            except asyncio.TimeoutError:
+
+                raise RuntimeError(
+                    "استغرق الاتصال وقتًا طويلًا، تأكدي من فتح المكالمة في المجموعة."
+                )
+
+            # بدء تشغيل الملف الصوتي
             group_call.input_filename = current_converted_path
 
-            if audio_duration > 0:
-                auto_stop_task = asyncio.create_task(schedule_auto_stop(audio_duration, current_chat_id))
+            logger.info(
+                "تم إرسال الملف الصوتي إلى نظام البث."
+            )
 
-            await status.edit_text("✅ بدأ البث بنجاح")
+            # =================================================
+            # تشغيل المؤقت بعد بدء البث
+            # =================================================
+
+            auto_stop_task = asyncio.create_task(
+                schedule_auto_stop(
+                    audio_duration,
+                    current_chat_id
+                )
+            )
+
+            logger.info(
+                "تم تشغيل مؤقت الإيقاف التلقائي."
+            )
+
+            await status.edit_text(
+                "✅ بدأ البث بنجاح"
+            )
 
         except Exception as error:
-            logger.exception("خطأ في /play: %s", error)
-            await stop_current_broadcast(send_kaffarat=False)
+
+            logger.exception(
+                "خطأ في /play: %s",
+                error
+            )
+
+            await stop_current_broadcast(
+                send_kaffarat=False
+            )
+
             if status:
+
                 try:
-                    await status.edit_text(f"❌ تعذر بدء البث: {str(error)[:200]}")
+
+                    await status.edit_text(
+                        f"❌ تعذر بدء البث: {str(error)[:200]}"
+                    )
+
                 except Exception:
                     pass
+
         finally:
+
             if downloaded_path:
-                await asyncio.to_thread(delete_path, downloaded_path)
+
+                await asyncio.to_thread(
+                    delete_path,
+                    downloaded_path
+                )
+
             if converted_path:
-                await asyncio.to_thread(delete_path, converted_path)
+
+                await asyncio.to_thread(
+                    delete_path,
+                    converted_path
+                )
 
 
+# -------------------------
+# /stop
+# -------------------------
 @app.on_message(filters.command("stop") & filters.group)
 async def stop_command(client, message):
-    if not message.from_user or not await is_admin(client, message.chat.id, message.from_user.id):
-        await message.reply_text("⚠️ هذا الأمر مقتصر على مشرفي المجموعة فقط.")
+
+    if (
+        not message.from_user
+        or not await is_admin(
+            client,
+            message.chat.id,
+            message.from_user.id
+        )
+    ):
+
+        await message.reply_text(
+            "⚠️ هذا الأمر مقتصر على مشرفي المجموعة فقط."
+        )
+
         return
 
     async with play_lock:
+
         if current_chat_id is None:
-            await message.reply_text("ℹ️ لا يوجد بث نشط حاليًا.")
+
+            await message.reply_text(
+                "ℹ️ لا يوجد بث نشط حاليًا."
+            )
+
             return
-        stopped = await stop_current_broadcast(send_kaffarat=True)
+
+        stopped = await stop_current_broadcast(
+            send_kaffarat=True
+        )
+
         try:
+
             await group_call.stop()
+
         except Exception:
             pass
+
         if stopped:
-            await message.reply_text("⏹️ تم إيقاف البث وتنظيف الملفات وإرسال الدعاء.")
+
+            await message.reply_text(
+                "⏹️ تم إيقاف البث وتنظيف الملفات وإرسال الدعاء."
+            )
 
 
+# =========================================================
+# Main
+# =========================================================
 async def main():
-    global shutting_down, play_lock, connection_event
+
+    global shutting_down
+    global play_lock
+    global connection_event
+
     play_lock = asyncio.Lock()
     connection_event = asyncio.Event()
+
     try:
+
         await app.start()
+
+        logger.info(
+            "تم تشغيل بوت التلاوة بنجاح."
+        )
+
         await idle()
+
     finally:
+
         shutting_down = True
+
         try:
-            await stop_current_broadcast(send_kaffarat=False)
+
+            await stop_current_broadcast(
+                send_kaffarat=False
+            )
+
         except Exception:
             pass
+
         try:
+
             if app.is_connected:
                 await app.stop()
+
         except Exception:
             pass
 
 
+# =========================================================
+# Start Application
+# =========================================================
 if __name__ == "__main__":
-    threading.Thread(target=run_web, daemon=True, name="web-server").start()
-    threading.Thread(target=self_ping_worker, daemon=True, name="self-ping").start()
+
+    threading.Thread(
+        target=run_web,
+        daemon=True,
+        name="web-server"
+    ).start()
+
+    threading.Thread(
+        target=self_ping_worker,
+        daemon=True,
+        name="self-ping"
+    ).start()
+
     app.run(main())
